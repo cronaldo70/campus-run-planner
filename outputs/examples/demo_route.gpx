@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="iOS Location Test" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>Demo route</name>
+    <trkseg>
+      <trkpt lat="37.77490" lon="-122.41940"><time>2026-01-01T00:00:00Z</time></trkpt>
+      <trkpt lat="37.77545" lon="-122.41905"><time>2026-01-01T00:00:08Z</time></trkpt>
+      <trkpt lat="37.77600" lon="-122.41870"><time>2026-01-01T00:00:16Z</time></trkpt>
+      <trkpt lat="37.77655" lon="-122.41835"><time>2026-01-01T00:00:24Z</time></trkpt>
+    </trkseg>
+  </trk>
+</gpx>

@@ -1,0 +1,111 @@
+# Windows + iPhone 定位测试验收报告
+
+检查日期：2026-11-12。测试主机运行 Windows 11 专业版 x64，系统版本 `10.0.26300`。用户仅有 iOS 27.2 设备，真机验收改用这台 iPhone。iOS/iPadOS 26 的结果仍为未实测。交接文件在项目目录中未找到，从下载目录读取了同名原件，并确认带 `(1)` 的副本 SHA-256 一致。
+
+## 阶段 0 · 工具和环境
+
+**工具和 Windows 环境核查完成。USB 服务已恢复，已读取一台 iOS 27.2 设备。**
+
+- **pymobiledevice3 11.52.1**（GPL-3.0-or-later）提供 `usbmux list`、`doctor` 和 DVT 定位的 `set / play / clear`。Windows 上的 iOS 17.4+ USB 路径使用进程内 userspace 隧道。上游维护者曾确认 iOS 26 上固定定位仍可用，回复未列 Windows、iPad 或各小版本的全项测试结果。[固定版本](https://pypi.org/project/pymobiledevice3/11.52.1/) · [隧道文档](https://github.com/doronz88/pymobiledevice3/blob/v11.52.1/docs/guides/ios17-tunnels.md) · [上游 iOS 26 反馈](https://github.com/doronz88/pymobiledevice3/discussions/1463)
+- **WanderPin v1.0.0** 是核查时最新发布，GPL-3.0，提供 Windows 安装包和免安装 ZIP。源码有固定点、GPX 导入、暂停/继续、停止和清除入口。GPX 导入只保留坐标，播放速度由界面控制。源码离线复现了缺少 `gpxpy` 的错误，补装 1.6.2 后读出 4 个样例坐标。未运行 Windows 发布包和桌面界面。[发布页](https://github.com/udpluna/wanderpin/releases/tag/v1.0.0) · [许可证](https://github.com/udpluna/wanderpin/blob/v1.0.0/LICENSE) · [GPX 实现](https://github.com/udpluna/wanderpin/blob/v1.0.0/core/services.py#L138)
+- **WanderPin 公开问题**。核查时 Issues 无问题单，另有开放 PR #1 涉及清除时的连接和移动竞态。贡献者报告在 Windows + iOS 26.6.2 USB 测试中，补丁使位置返回真实区域，但精度圈仍偏大。该结果来自 PR，且补丁未合入 v1.0.0。[公开 Issues](https://github.com/udpluna/wanderpin/issues) · [PR #1](https://github.com/udpluna/wanderpin/pull/1)
+- **主机状态**。检测到 Apple Devices `1.1792.39682.0`。初查没有 Apple USB 设备，`127.0.0.1:27015` 不可达。接入 iPhone 后，Windows 枚举到 Apple USB 设备。启动 Apple Devices 后，`doctor` 报告 USB 服务可达，随后 USB 列表读出一台 iPhone。服务列表未显示旧版独立 Apple Mobile Device Service。
+- **Python**。`py -0p` 列出 Python 3.14 和 Astral CPython 3.12.15（x64）。`python --version` 命中 Microsoft Store 别名，`py -3.12` 找不到匹配项。用 `py -V:Astral\CPython3.12.15` 创建了独立虚拟环境。
+
+选用 pymobiledevice3 作为主线，WanderPin 作为可选界面。唯一新增功能是按时间戳回放前的离线校验。上游播放器遇到零个轨迹点时无位置可发送，遇到缺失时间或倒序时间时会跳过等待，也未检查经纬度范围。直接复用其 GPX 解析器可让离线检查和实际播放使用同一套点与时间解析规则。[上游播放器源码](https://github.com/doronz88/pymobiledevice3/blob/v11.52.1/pymobiledevice3/services/dvt/instruments/location_simulation_base.py)
+
+## 阶段 1 · Windows CLI
+
+**软件安装、命令入口、iOS 27.2 USB 连接和 DVT 调试通道通过。**
+
+| 本地实测 | 结果 |
+| --- | --- |
+| Python 3.12.15 新建虚拟环境，安装 pymobiledevice3 11.52.1 | 成功。 `version` 输出 `11.52.1`，`pip check` 无冲突。 |
+| `simulate-location set --help`、`play --help`、`clear --help` | 均退出 0。PowerShell 能原样传递 `-- 37.7749 -122.4194`。 |
+| `doctor`、`usbmux list --usb` | 初次退出 1，报 `Failed to connect to usbmuxd socket. Make sure it's running.`。连接 iPhone 并启动 Apple Devices 后，两个命令均退出 0。 |
+| 已连接的真机 | USB 成功读取 iPhone（`iPhone15,3`），iOS 27.2（`24B119`）。用户开启开发者模式后，`amfi developer-mode-status` 返回 `true`。默认隧道下的只读命令 `developer dvt ls /` 成功，退出码 0。 |
+
+## 阶段 2 · GPX 和停止恢复
+
+**离线验收、iOS 27.2 固定位置和 GPX 回放通过。后续两次固定点测试通过等待设备应答实现免重启恢复。**
+
+- `check_gpx.py` 使用固定版本自带的解析器，独立运行时只读 GPX。样例含 4 个点，首尾间隔 24 秒。
+- `python -m unittest discover -s tests -v` 的 10 项测试通过。覆盖样例、空轨迹、单点、仅有路线点、时间倒序或重复、有效 UTC 偏移、缺失或无效时间、越界或非有限坐标、缺少坐标、损坏 XML。
+- 用替身记录上游 GPX 播放器的调用。样例产生四次有序位置发送调用，间隔三次 8 秒的等待调用。此项离线检查模拟了发送和等待。
+- 固定点保持约 20 秒，`set` 退出码 0。用户确认苹果地图蓝点移动到旧金山。
+- 结束固定点会话后，CLI `clear` 退出码 0。随后在新的 DVT 会话重试清除，发送后保持会话 3 秒。用户重新定位后蓝点仍在旧金山，手动重启后蓝点返回测试前的区域。
+- 重启后在同一台设备使用上游 `LocationSimulation.play_gpx_file` 回放。四个点依序发送，实际首末发送间隔约 24.1 秒，用户确认苹果地图蓝点沿路线移动。此次通过上游 Python API 保持回放会话，便于在原会话内发送清除。发送后等待 3 秒再关闭会话，用户重新定位时蓝点仍在旧金山，再次手动重启后确认恢复。
+
+### 免重启恢复复测
+
+1. 保持固定点约 15 秒，在同一 DVT 会话发出 `stopLocationSimulation` 并等待应答。设备约 0.02 秒后返回空应答，用户确认蓝点从模拟点回到原位，全程未重启。
+2. 用 CLI `set` 再做一次固定点测试，按 Enter 退出后运行独立清除脚本。脚本从新会话收到设备应答，退出码为 0，用户再次确认蓝点回到原位，全程未重启。
+3. 第一轮同步观察了 `locationd`。停止阶段匹配到 4 条同时涉及模拟和停止或清除的日志。仅保留关键词计数，无法凭该计数判定先前失败的原因。
+
+交付的 `clear_location.py` 使用现有 DVT 方法并等待设备回复。上游 11.52.1 的 `clear` 在源码里设置了 `expects_reply=False`。本次实测验证了等待回复的方式在这台设备上的效果，先前未恢复的底层原因仍未确定。[上游清除实现](https://github.com/doronz88/pymobiledevice3/blob/v11.52.1/pymobiledevice3/services/dvt/instruments/location_simulation.py)
+
+## 阶段 3 · 可选界面
+
+**暂缓。** 交接要求先通过 CLI 真机验收。可选 WanderPin 的发布包、源码启动步骤和界面操作见 [README](README.md#5-可选桌面工具-wanderpin)。
+
+## 阶段 4 · 校园跑 MVP 打通
+
+**规划、GPX 生成、真机回放、恢复四条链路已在 iPhone15,3 / iOS 27.2 上跑通。**
+
+交接的 MVP 只在界面上画出了路线，没有任何代码把路线变成按时间推进的轨迹并送到设备，因此实测时步道乐跑只看到一个不动的点，判定为 GPS 信号弱。本次补上 `run-planner/location_sim.py` 并把界面按钮接到它上面。
+
+| 本地实测 | 结果 |
+| --- | --- |
+| 路线到 GPX 的换算 | 起点 (-150,-41)、A (-160,-41)、B (-97,150) 经 `RoadNetwork.nearest/through` 得到闭合环，单圈 751.7 米；目标配速 6:00、最短 3 公里、自动补足后为 4 圈、3.007 公里、1280 个轨迹点、901 秒，`check_gpx.py` 校验通过。 |
+| 界面 → GPX | `test_wiring.py` 直接调用界面同一个 `Planner`，`build_track()` 与 `save_track()` 生成 `run-planner/generated/route-20261112-1325.gpx`（114113 字节），首尾点经纬度与地图投影一致。 |
+| 真机回放 | 同一 GPX 以 15 倍速发送 1280 个点，78.7 秒走完全程、退出码 0。苹果地图蓝点从校区北侧移到磬苑广场附近并自动跟随，说明设备侧收到的是连续移动而非单点。 |
+| 手动停止与恢复 | 界面「停止模拟并恢复定位」置停止标志，回放协程在同一 DVT 会话内发送 `stopLocationSimulation` 并等待应答（约 3 秒）。截图确认蓝点变成定位中的精度圈，模拟位置已撤销。 |
+| 界面全链路 | `test_gui_flow.py` 驱动真实按钮：`开始模拟跑` → 进度 `1/1280` → `模拟跑结束，已请求设备恢复真实定位`；第二轮回放 8 秒后点停止 → `已手动停止，设备已确认恢复`。两条路径均无异常栈。 |
+| 修复的缺陷 | 初版停止按钮另开一条隧道，触发 `A userspace tunnel is already active in this process`。改为复用回放会话后消失；`_single_device` 曾在协程里调 `asyncio.run`，触发 `asyncio.run() cannot be called from a running event loop`，改为 async 后消失。 |
+| 实跑窗口布局 | 首版把控制和计时排在同一列，用户屏幕上「开始模拟跑」被挤到窗口外，只看到「本地计时」，误以为模拟没启动。改为固定 520×640 居中窗口，把「开始模拟跑 / 停止 / 只导出 GPX」提到顶部，按钮加 `takefocus=0` 防误触发。 |
+| 步道乐跑侧确认 | App 在计时状态下收到连续定位：界面显示 `GPS信号优`、累计 0.07 公里、平均配速 32'08"、「已打卡 1」（文典阁西门绿勾）、未打卡点显示「距你 249 米」，地图上出现绿色已跑轨迹。证明 Core Location 的模拟位置被第三方 App 正常消费。 |
+| 单文件回放入口 | `sim_now.py` 回放 `generated\` 最新 GPX：912 点 / 3.003 公里 / 名义 12 分 00 秒，退出码 0，Ctrl+C 走停止并恢复。 |
+
+未覆盖：界面的触屏注入（USB 通道无此能力，「开始乐跑」必须人工点）；步道乐跑服务端对模拟轨迹的判定结果，只能由 App 侧显示确认。
+
+## 阶段 5 · 轨迹真实感与避障
+
+**轨迹不再沿路网折线直拐，规划器在生成前就避开水域和建筑，并在状态栏报告残留穿行。**
+
+起因是实测反馈：路线「不像真人跑的，有时穿过障碍物、河流」。先量化再改，`work/diag_route_quality.py` 与 `work/render_route.py` 给出的结论是——3247 条路网边里没有一条压过水面（14 个水域多边形状全部无交），27 条边（433 米）压过建筑；观感上的「穿河」来自 933 米的最长边横跨整个校区，配合 16 个 112° 直角，看起来像一把尺子硬拉过去。
+
+| 本地实测 | 结果 |
+| --- | --- |
+| 折线质量基线 | 笃行北楼—文典阁—磬苑广场 1.391 公里、116 个顶点，16 个 112° 直角，0 处贴建筑中心；`work/route_before.png` |
+| 圆角 | `round_corners` 半径 16 米，二次贝塞尔与两段相切，切点距离取 `min(radius, 0.45×两段长)`，弯角 <10° 不动。同一路线最大转角从 112° 降到 53°，单圈 1.399 → 1.367 公里（内切短 2.3%）。 |
+| 横向摆动 | `wobble` 峰值 2.0 米，38/97/263 米三波长按 0.55/0.30/0.15 叠加，沿法向偏移；切向用前后各 2 点窗口算，短线不会抖。相邻点位移 < 0.6 米，仍是连续可跑的曲线。 |
+| 配速波动 | `pace_profile` 起始 22 秒渐加速、±7.5% 起伏，速度积分后按 `(总里程/基准速度)/总时长` 归一，平均配速精确等于设定值。目标 6:00 时 200 米滑窗分段落在 345–398 秒/公里。 |
+| 真机回放（新几何） | `location_sim.py --play-gpx generated\route-human-20261112-1351.gpx --speed 120`：2011 个点全部送达，退出码 0，结束后同会话 `stopLocationSimulation` 待应答清除成功。 |
+| 避障路由 | `road_network` 用水域/建筑多边形与边求交，压过实体的边权重 ×40，标点吸附时对实体边加 30 米罚分，Dijkstra 去掉会剪掉合法路径的 `cost >= best` 提前退出。40 组随机起终点：不避障 0/40 违规但平均 1756 米（旧剪枝导致的绕远），避障版 1/40 违规、平均 1635 米。 |
+| 路网覆盖率 | `coverage()` 报「3015 个路点 / 3247 段 / 131.7 公里，其中 0.43 公里绕行」。 |
+| 残留提示 | 标点本身落在建筑内部的 1 例无法靠改路径解决，`violations()` 会在状态栏提示「⚠ 路线仍有 建筑 X 米 穿行，建议调整标点」。 |
+| 单元测试 | `run-planner/tests/test_track_shape.py` 14 项（圆角、摆动、配速、`build_track` 端到端）与 `outputs/tests` 10 项全部通过。 |
+| 界面文案 | `check_plan_text.py` 输出「轨迹 2011 个点、单圈 1.367 公里，配速 5:46–6:27（圆角 16 米 · 横向偏移 2.0 米）」，按钮状态 `normal`。 |
+
+## 交接验收清单
+
+| 项目 | 当前结果 | 验收证据 |
+| --- | --- | --- |
+| A1 Windows 驱动和依赖检查 | 通过。启动 Apple Devices 后 USB 服务可达 | Windows / Apple Devices / Python 版本，`doctor` 退出 0 |
+| A2 授权 USB 连接 | iOS 27.2 通过 | `usbmux list --usb` 能识别设备，`amfi developer-mode-status` 返回 `true`，DVT 只读命令成功 |
+| A3 固定位置 | iOS 27.2 通过 | 用户确认苹果地图蓝点移到旧金山 |
+| A4 GPX 按时间回放 | iOS 27.2 通过 | 首末发送间隔约 24.1 秒，用户确认蓝点沿路线移动。真机使用与 CLI 相同的上游播放器 API，CLI 入口通过了本机帮助检查。 |
+| A5 停止与恢复 | iOS 27.2 固定点免重启恢复通过 | 原会话和新会话各完成一次等待应答的清除，蓝点均回到原位。GPX 接新版清除脚本、途中 Ctrl+C 和拔线重连仍待实测。手动重启已验证为恢复手段。 |
+| A6 离线 GPX 校验 | 通过 | 10 项测试通过 |
+| A7 Windows 复现说明 | 软件安装路径通过 | 新虚拟环境安装、版本和命令入口已验证。Python 与 Apple Devices 从零安装、真机配对流程未实测。 |
+| A8 规划器到真机回放 | iOS 27.2 通过 | 界面按钮生成 GPX 并在真机回放 1280 点，走完与手动停止两条路径均恢复真实定位 |
+| A9 轨迹真实感与避障 | iOS 27.2 通过 | 圆角 16 米 + 摆动 2.0 米 + 配速起伏后的 2011 点轨迹在真机回放完成并恢复定位；40 组随机起终点避障测试 1 例残留、0.43 公里绕行边 |
+
+## 真机填写
+
+每格记录「已成功」「已失败（附脱敏错误）」或「未实测」。如果必须重启才恢复，单独记录重启恢复。
+
+| 设备 | 型号 / 系统版本及构建号 | USB 与开发者模式 | 固定位置 | GPX 点序与时长 | Ctrl+C 后清除 | 拔线重连后清除 | 真实定位恢复耗时 / 精度 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| iPhone | `iPhone15,3` / 27.2（`24B119`） | 已成功 | 已成功 | 已成功，约 24.1 秒；规划器 1280 点回放通过 | 未实测 | 未实测 | 固定点等待应答后两次免重启恢复，耗时与精度未记录。规划器回放结束与手动停止后均以苹果地图精度圈确认模拟位置撤销。 |
+| iPhone / iPad | iOS / iPadOS 26.x | 未实测 | 未实测 | 未实测 | 未实测 | 未实测 | 未实测 |
