@@ -21,6 +21,9 @@ PENALTY = 40.0
 SNAP_PENALTY = 30.0
 # Mild preference for footpaths over the car loop around campus.
 STYLE_WEIGHT = {"path": 1.0, "road": 1.06, "major": 1.22}
+# Edges whose midpoint falls outside the campus rectangle are priced up: walking
+# out of the run zone earns no credit in the app and looks obviously staged.
+OUTSIDE_PENALTY = 8.0
 
 
 @dataclass(frozen=True)
@@ -90,10 +93,22 @@ def read_obstacles(data: dict, kinds=SOLID_KINDS) -> list[Obstacle]:
 
 
 class RoadNetwork:
-    def __init__(self, data: dict, *, avoid=SOLID_KINDS, penalty: float = PENALTY):
+    def __init__(self, data: dict, *, avoid=SOLID_KINDS, penalty: float = PENALTY,
+                 container=None, outside_penalty: float = OUTSIDE_PENALTY):
         self.nodes = [tuple(point) for point in data["nodes"]]
         self.penalty = penalty
         self.obstacles = read_obstacles(data, avoid) if avoid else []
+        # The map carries arterial roads that run kilometres off campus; a route
+        # that wanders out there is outside the run zone and gets no credit.
+        # Everything whose midpoint leaves the campus rectangle is priced up.
+        if container is None:
+            bounds = data.get("bounds")
+            if bounds:
+                low_x, low_y, high_x, high_y = bounds
+                inset = 25.0
+                container = (low_x + inset, low_y + inset, high_x - inset, high_y - inset)
+        self.container = container
+        self.outside_penalty = outside_penalty
         styles: dict[tuple[int, int], str] = {}
         self.edges = set()
         for style, walkable, ids in data["roads"]:
@@ -109,6 +124,7 @@ class RoadNetwork:
                     styles[edge] = style
         self.edges = sorted(self.edges)
         self.solid: set[tuple[int, int]] = set()
+        self.outside: set[tuple[int, int]] = set()
         self.neighbors: list[list[tuple[int, float, float]]] = [[] for _ in self.nodes]
         self.weight: dict[tuple[int, int], float] = {}
         for edge in self.edges:
@@ -119,9 +135,19 @@ class RoadNetwork:
             if kind:
                 self.solid.add(edge)
                 weight *= penalty
+            if not self.inside(((self.nodes[a][0] + self.nodes[b][0]) * 0.5,
+                                (self.nodes[a][1] + self.nodes[b][1]) * 0.5)):
+                self.outside.add(edge)
+                weight *= outside_penalty
             self.weight[edge] = weight
             self.neighbors[a].append((b, length, weight))
             self.neighbors[b].append((a, length, weight))
+
+    def inside(self, point: Point) -> bool:
+        if not self.container:
+            return True
+        low_x, low_y, high_x, high_y = self.container
+        return low_x <= point[0] <= high_x and low_y <= point[1] <= high_y
 
     def crossing(self, a: Point, b: Point) -> str | None:
         for obstacle in self.obstacles:
@@ -205,6 +231,15 @@ class RoadNetwork:
             if kind:
                 found[kind] = found.get(kind, 0.0) + dist(a, b)
         return sorted(found.items())
+
+    def outside_metres(self, route: list[Point]) -> float:
+        """How much of ``route`` lies outside the campus rectangle."""
+        total = 0.0
+        for a, b in zip(route, route[1:]):
+            midpoint = ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5)
+            if not self.inside(midpoint):
+                total += dist(a, b)
+        return total
 
     def coverage(self) -> str:
         total = sum(dist(self.nodes[a], self.nodes[b]) for a, b in self.edges)

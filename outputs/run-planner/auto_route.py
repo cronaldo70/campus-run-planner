@@ -146,7 +146,10 @@ def plan(net, start: Point, checkpoints: list[Point], *, minimum: float = 2500.0
 
     additions = 0
     rng = random.Random(seed)
-    candidates = list(range(0, len(net.nodes), max(1, len(net.nodes) // 90)))
+    # Only campus nodes qualify for a filler leg: the map also carries arterial
+    # roads kilometres outside the gate, and walking there earns no credit.
+    candidates = [node for node in range(0, len(net.nodes), max(1, len(net.nodes) // 90))
+                  if net.inside(net.nodes[node])]
     while metres < minimum and additions < 4:
         remaining = minimum - metres
         end = net.nearest(route[-1])
@@ -205,6 +208,7 @@ def plan(net, start: Point, checkpoints: list[Point], *, minimum: float = 2500.0
         "legs": legs,
         "tail_legs": additions,
         "access": access,
+        "outside": net.outside_metres(route),
         "warnings": covering,
     }
 
@@ -220,5 +224,8 @@ def describe(net, start: Point, checkpoints: list[Point], result: dict, names: l
     violations = net.violations(result["route"])
     if violations:
         lines.append("⚠ " + "、".join(f"{kind} {metres:.0f} 米" for kind, metres in violations) + " 穿行")
+    outside = net.outside_metres(result["route"])
+    if outside > 30.0:
+        lines.append(f"⚠ 有 {outside:.0f} 米在校区范围外，App 可能不算成绩，建议把起终点换到校门内侧")
     lines.extend("⚠ " + warning for warning in result["warnings"])
     return "\n".join(lines)

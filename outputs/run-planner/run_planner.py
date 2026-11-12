@@ -97,7 +97,7 @@ class Planner:
         self.loop = tk.BooleanVar(value=True)
         self.auto_distance = tk.BooleanVar(value=True)
         self.order = tk.StringVar(value=ORDERS[0])
-        self.minimum = tk.StringVar(value="3")
+        self.minimum = tk.StringVar(value="2.5")
         self.fastest = tk.StringVar(value="3:00")
         self.slowest = tk.StringVar(value="8:00")
         self.target = tk.StringVar(value="6:00")
@@ -666,6 +666,48 @@ class Planner:
         duration = format_time(kilometers * target) if target is not None else "—"
         return messages, duration
 
+    def render_rows(self):
+        """把读到的打卡点写回 A/B 两行，状态也写在同一行，而不是只在底部加一句解释。"""
+        slots = {"a": 0, "b": 1}
+        for key, button in self.point_buttons.items():
+            if key == "via":
+                continue
+            name = self.point_names.get(key, "")
+            index = slots.get(key)
+            if index is not None and index < len(self.via):
+                name = self.via_names[index] if index < len(self.via_names) else f"打卡点 {index + 1}"
+                name = name if len(name) <= 8 else name[:7] + "…"
+            button.configure(text=POINT_LABELS.get(key, "") + name)
+        for key, label in self.point_details.items():
+            if key == "via":
+                label.configure(text=f"{len(self.via)} 个打卡点" if self.via else "未用")
+                continue
+            index = slots.get(key)
+            if index is not None:
+                if index < len(self.via):
+                    gap = self.via[index][1].offset
+                    label.configure(text=f"已定位 · 离路 {gap:.0f} 米" if gap >= 4 else "已定位", fg=INK)
+                else:
+                    label.configure(text="待标记", fg=MUTED)
+                continue
+            if key == "start":
+                if "start" in self.points:
+                    offset = self.points["start"][1].offset
+                    label.configure(text=f"离路 {offset:.0f} 米" if offset >= 4 else "已标记", fg=INK)
+                else:
+                    label.configure(text="待标记", fg=MUTED)
+                continue
+            if key == "end":
+                if self.open_route.get():
+                    label.configure(text="不限", fg=MUTED)
+                elif self.loop.get():
+                    label.configure(text="返回起点", fg=MUTED)
+                elif "end" in self.points:
+                    offset = self.points["end"][1].offset
+                    label.configure(text=f"离路 {offset:.0f} 米" if offset >= 4 else "已标记", fg=INK)
+                else:
+                    label.configure(text="待标记", fg=MUTED)
+
     def refresh_open(self):
         """Open run: start where the phone is, punch everything, finish anywhere."""
         self.route = []
@@ -683,17 +725,7 @@ class Planner:
             active = self.selected == key
             button.configure(bg=TEAL if active else BG, fg=SURFACE if active else INK,
                              state="normal" if key == "start" else "disabled")
-            if key in POINT_LABELS:
-                button.configure(text=POINT_LABELS[key] + self.point_names[key])
-        for key, label in self.point_details.items():
-            if key == "start":
-                if "start" in self.points:
-                    offset = self.points["start"][1].offset
-                    label.configure(text=f"离道路约 {offset:.0f} 米" if offset >= 4 else "已标记")
-                else:
-                    label.configure(text="待标记")
-            else:
-                label.configure(text=f"{len(self.via)} 个打卡点" if key == "via" else "不绕圈时不用")
+        self.render_rows()
         self.via_count.configure(text=f"{len(self.via)} 个打卡点")
         self.undo.configure(state="normal" if self.via else "disabled")
         for index in range(3):
@@ -747,16 +779,7 @@ class Planner:
             enabled = key != "end" or not self.loop.get()
             button.configure(bg=TEAL if active else BG, fg=SURFACE if active else INK,
                              state="normal" if enabled else "disabled")
-            if key in POINT_LABELS:
-                button.configure(text=POINT_LABELS[key] + self.point_names[key])
-        for key, label in self.point_details.items():
-            if key == "end" and self.loop.get():
-                label.configure(text="返回起点")
-            elif key in self.points:
-                offset = self.points[key][1].offset
-                label.configure(text=f"离道路约 {offset:.0f} 米" if offset >= 4 else "已标记")
-            else:
-                label.configure(text="待标记")
+        self.render_rows()
         self.via_count.configure(text=f"{len(self.via)} 个")
         self.undo.configure(state="normal" if self.via else "disabled")
         for index, value in enumerate(("—", "—", "—")):

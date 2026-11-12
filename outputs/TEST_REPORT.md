@@ -103,6 +103,19 @@
 | 单元测试 | `run-planner/tests` 14 项、`outputs/tests` 10 项全部通过；`work/test_auto.py` 的 OCR→定位→路线链路全绿。 |
 | 真机 | 进行中：设备本轮拔线后 `usbmux list --usb` 为空，接回后需实测一次「读取 → 不绕圈 → 模拟跑 → 全部点变绿」。 |
 
+## 阶段 7 · 不出校区、状态就地回填、可分发给别人
+
+**路线不再跑出跑区，读完手机的状态直接写在对应行，仓库带上依赖清单、许可证、Release 打包脚本与首启动自建 venv。**
+
+| 本地实测 | 结果 |
+| --- | --- |
+| 校区约束 | `road_network.py` 新增 `OUTSIDE_PENALTY=8.0`，`container` 默认取 `bounds` 内缩 25 米，外部边权重 ×8，新增 `inside()` / `outside_metres()`；`auto_route.py` 的补里程候选只保留 `net.inside()` 为真的节点。 |
+| 越界回归 | 起点 (-220.99,-28.61) → 文典阁西门 (-187.7,-29.0) + 体育馆大门 (109.0,867.0)、下限 2500 米 → 2513 米、补里程 2 段、`outside` 0 米、避障违规 0、包围盒 (-221,-29,481,1030)。修复前同一输入尾段会跳到校外干道。 |
+| 状态回填 | `run_planner.py` 新增 `render_rows()`：A/B 行显示真实名字与「已定位 · 离路 N 米」，起点「已标记」、终点 open 模式「不限」、途经「N 个打卡点」；`work/test_gui_range.py` 输出 `[('start','已标记'), ('a','已定位 · 离路 33 米'), ('b','已定位 · 离路 50 米'), ('end','不限'), ('via','2 个打卡点')]`。默认最短距离改 2.5 公里。 |
+| 依赖与许可 | 新增 `requirements.txt`（`pymobiledevice3==11.52.1`）、`LICENSE`（MIT），README 补「别人怎么用」与「关于传感器」。 |
+| 首启动 bootstrap | `启动规划器.bat` 在 `work\.venv` 不存在时自己挑解释器（`CAMPUS_RUN_PYTHON` → `py -3.13/3.12/3.11/3.10` → `python`），建 venv 并 `pip install -r requirements.txt`；`CAMPUS_RUN_PIP_INDEX` 可指定镜像。 |
+| 分发验证 | `tools\pack_release.ps1` 打出 `dist\campus-run-planner-v0.6.zip`（145 KB，无 venv/无生成 GPX）；`work/test_release_boot.py` 解压到空目录、用 `CAMPUS_RUN_PYTHON` 指向 3.12 跑启动器，venv 建成并弹出「校园跑路线规划」窗口即算通过。 |
+
 ## 交接验收清单
 
 | 项目 | 当前结果 | 验收证据 |

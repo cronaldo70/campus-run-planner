@@ -12,6 +12,10 @@ outputs/run-planner/test_loop.gpx
 # 本机运行日志
 *.log
 
+# Release 产物与首启动自检解压目录
+dist/
+work/release-test/
+
 # 系统垃圾
 Thumbs.db
 desktop.ini

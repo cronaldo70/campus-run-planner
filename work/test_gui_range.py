@@ -60,6 +60,9 @@ def main() -> int:
         print("plan:", str(planner.plan_text).strip().splitlines()[:3])
         print("metrics:", [label.cget("text") for label in planner.metrics])
         print("button:", planner.read_button.cget("state"))
+        print("rows:", [(k, planner.point_details[k].cget("text"))
+                        for k in ("start", "a", "b", "end")]
+              + [("via", planner.via_count.cget("text"))])
         root.quit()
 
     def watchdog():

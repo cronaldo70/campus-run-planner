@@ -51,3 +51,39 @@ work\.venv\Scripts\python.exe -B outputs\run-planner\location_sim.py --play-gpx 
 ## 依赖
 
 Python 3.12 + `pymobiledevice3`（见 `work\.venv`），Windows 10/11（OCR 用系统 `Windows.Media.Ocr`）。
+
+## 别人怎么用（分发）
+
+别人不需要懂代码，按这三步走：
+
+1. **装 Python**：https://www.python.org/downloads/ 装 3.12（安装时勾 `Add python.exe to PATH`）。
+2. **拿代码**：`git clone https://github.com/cronaldo70/campus-run-planner.git`，或在 Releases 页下载 `campus-run-planner-vX.Y.zip` 解压。
+3. **装依赖并启动**（cmd 里执行）：
+   ```bat
+   cd campus-run-planner
+   python -m pip install -r requirements.txt
+   启动规划器.bat
+   ```
+   第一次会自己建 venv（`work\.venv`）并装 `pymobiledevice3`，之后双击 bat 就能开。
+
+手机侧要求：iOS 17 及以上、USB 连电脑、点「信任此电脑」、设置 → 隐私与安全性 → **开发者模式**打开并重启一次。iOS 16 及以下、安卓、Mac/Linux 都不在支持范围（DVT 定位隧道只有 Windows 这套脚本实现）。
+
+界面三步：`读取手机打卡点（自动识别）` → 确认勾选「不绕圈」和最短距离 → `开始模拟跑`。手机 App 里的「开始乐跑」要自己点，脚本无法点屏幕。
+
+打包给别人的 zip：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\pack_release.ps1
+# 产物 dist\campus-run-planner-v0.6.zip，只含源码/文档/启动脚本，不含 venv 与生成的 GPX
+gh release create v0.6 dist\campus-run-planner-v0.6.zip --title "v0.6" --notes "读取打卡点 + 开放式路线"
+```
+
+## 关于传感器（速度计 / 指南针 / 陀螺仪）
+
+DVT 的 `LocationSimulation` 只写 **CoreLocation 的位置**，不碰 CoreMotion。所以：
+
+- **速度、方向（course）没有问题**：它们不是独立传感器读数，而是 CoreLocation 从位置序列算出来的。点间隔 1 秒、位置连续、配速稳定，App 拿到的 speed/course 就自然正确。
+- **加速度计 / 陀螺仪 / 指南针拿不到**：iOS 27 没有越狱，CoreMotion 的原始数据无法注入；`CMPedometer` 的步数、HealthKit 的锻炼记录也补不了。
+- 步道乐跑自己的规则页写的是「根据运动行为特征、个人运动大数据、登录设备综合分析」——判据是**轨迹统计**（配速区间、直线段、重复轨迹、跑区内外），不是传感器。真要拿步数说话，只能靠人拿着手机走/跑一段。
+
+所以本工具能做的是把「轨迹层」做到人类水平：真实路网、圆角转弯、横向漂移、配速波动、开放式不闭合、单次里程不取整。**传感器层的伪造不在能力范围内**，这也是为什么建议配速别低于 4:30、别在凌晨、别每天同一条路线。
