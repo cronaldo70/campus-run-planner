@@ -8,6 +8,7 @@ import re
 import threading
 import time
 import tkinter as tk
+import traceback
 import webbrowser
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -428,6 +429,21 @@ class Planner:
         except (RuntimeError, OSError, ValueError) as error:
             self.root.after(0, lambda: self.finish_read(None, str(error) or type(error).__name__))
             return
+        # App-only names (名人景观墙碑记 …) are not in campus_map: move the fix to
+        # three road points and trilaterate them from the printed distances.
+        others = report.get("others") or []
+        if others or not report.get("checkpoints"):
+            try:
+                import locate_checkpoints as ranging
+
+                solved = ranging.locate_all(self.data, self.network, labels, settle=6.0,
+                                            progress=lambda message: None)
+            except Exception:
+                solved = {}
+            for name, item in solved.items():
+                report.setdefault("checkpoints", []).append(
+                    {"name": name, "ocr": name, "point": tuple(item["point"]),
+                     "metres": None, "error": item["error"]})
         self.root.after(0, lambda: self.finish_read(report, ""))
 
     def finish_read(self, report, error):
@@ -451,11 +467,19 @@ class Planner:
             point = tuple(item["point"])
             self.via.append((point, self.network.nearest(point)))
             self.via_names.append(item["name"])
+        if not position and self.via:
+            # Ranging always leaves a workable answer: start on the pavement next
+            # to the first punch instead of asking for a manual click.
+            anchor = self.via[0][0]
+            point = self.network.nearest(anchor).point
+            self.points["start"] = point, self.network.nearest(point)
         self.selected = "via"
         self.refresh()
         note = f"读到 {len(report['checkpoints'])} 个打卡点：" + "、".join(item["name"] for item in report["checkpoints"]) + "。"
         if position:
             note += f"当前位置约 ({position[0]:.0f}, {position[1]:.0f})，残差 {report['position_error']:.0f} 米。"
+        elif self.via:
+            note += "起点放在第一个打卡点旁边的路上（两点距离解不出唯一位置）。"
         if report["warnings"]:
             note += " " + " ".join(report["warnings"])
         self.result.configure(text=note, fg=AMBER if report["warnings"] else MUTED)
@@ -963,8 +987,20 @@ def main():
         messagebox.showerror("无法加载校园地图", "请将 campus_map.json 与 run_planner.py 放在同一目录。")
         root.destroy()
         return
-    Planner(root, data)
-    root.mainloop()
+    root.lift()
+    root.attributes("-topmost", True)
+    root.after(600, lambda: root.attributes("-topmost", False))
+    try:
+        Planner(root, data)
+        root.mainloop()
+    except Exception:
+        # 双击启动时没有终端可看，把 traceback 落到文件里，别让窗口悄悄消失。
+        log = Path(__file__).with_name("planner-error.log")
+        log.write_text(traceback.format_exc(), encoding="utf-8")
+        root.withdraw()
+        messagebox.showerror("规划器启动失败",
+                             f"{traceback.format_exc().strip().splitlines()[-1]}\n\n详情见 {log}")
+        root.destroy()
 
 
 if __name__ == "__main__":

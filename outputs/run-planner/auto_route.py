@@ -128,18 +128,10 @@ def plan(net, start: Point, checkpoints: list[Point], *, minimum: float = 2500.0
     """Return the route, its length, the checkpoint order and any residual warning."""
     if not checkpoints:
         raise ValueError("还没有打卡点：先读取手机画面或在地图上点选。")
-    # A label often sits in the middle of a building. Aim for the point on the
-    # pavement that is just inside the punch radius, not the centroid itself.
-    aims = []
-    for point in checkpoints:
-        position = net.nearest(point)
-        gap = math.dist(point, position.point)
-        if gap > punch * 0.7:
-            ratio = (punch * 0.7) / gap
-            aims.append((point[0] + (position.point[0] - point[0]) * ratio,
-                         point[1] + (position.point[1] - point[1]) * ratio))
-        else:
-            aims.append(point)
+    # A label often sits in the middle of a building. What you actually punch
+    # from is the pavement next to the pin, so aim straight at the access point
+    # instead of walking to the centroid.
+    aims = [net.nearest(point).point for point in checkpoints]
     positions = [net.nearest(start)] + [net.nearest(point) for point in aims]
     table = _matrix(net, positions)
     order = best_order(table)
@@ -150,6 +142,7 @@ def plan(net, start: Point, checkpoints: list[Point], *, minimum: float = 2500.0
         route.extend(segment[1:])
         legs.append(length)
     metres = _route_metres(route)
+    required = len(route)
 
     additions = 0
     rng = random.Random(seed)
@@ -177,6 +170,19 @@ def plan(net, start: Point, checkpoints: list[Point], *, minimum: float = 2500.0
         metres = _route_metres(route)
         legs.append(length)
         additions += 1
+
+    # A tail leg is picked from coarse candidates, so it can overshoot by
+    # hundreds of metres. Cut it back to the first vertex that reaches the
+    # minimum, keeping every vertex that serves a checkpoint untouched.
+    if metres > minimum + 200.0 and len(route) > required:
+        distances = [0.0]
+        for previous, current in zip(route, route[1:]):
+            distances.append(distances[-1] + math.dist(previous, current))
+        for index in range(required, len(route)):
+            if distances[index] >= minimum:
+                route = route[:index + 1]
+                metres = distances[index]
+                break
 
     # What the runner actually punches from is the pavement next to the pin: the
     # label itself often sits on a building centroid, tens of metres from any path.

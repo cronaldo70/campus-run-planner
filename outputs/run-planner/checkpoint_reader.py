@@ -59,11 +59,19 @@ foreach ($line in $result.Lines) {
 
 DISTANCE = re.compile(r"(\d+(?:\.\d+)?)\s*(公里|千米|km|KM|米|m|M)")
 NOISE = re.compile(r"(打卡|未打卡|已打卡|签到|点位|距离|距你|当前|共|个点|/|\d+)")
+# Words that belong to the run-record page, never to a checkpoint row.
+RECORD_WORDS = ("里程", "用时", "配速", "成绩", "记录", "上传", "跑区", "分钟")
+
+
+def flatten(text: str) -> str:
+    """Drop OCR spacing and repair the decimal point OCR reads as a middle dot."""
+    text = re.sub(r"\s+", "", text)
+    return re.sub(r"(?<=\d)[·．。](?=\d)", ".", text)
 
 
 def normalise(text: str) -> str:
     """Fold OCR spacing and drop the qualifiers that make the same place differ."""
-    text = re.sub(r"\s+", "", text)
+    text = flatten(text)
     for suffix in ("西北门", "东北门", "西南门", "东南门", "西门", "东门", "南门", "北门",
                    "校区", "学院", "广场", "餐厅", "宿舍", "教学楼", "操场"):
         text = text.replace(suffix, "")
@@ -105,8 +113,11 @@ def parse(lines: list[tuple[int, int, str]]) -> list[tuple[str, float]]:
     found: list[tuple[str, float]] = []
     pending: str | None = None
     for _x, _y, raw in lines:
-        text = raw.strip()
+        text = flatten(raw.strip())
         if not text:
+            continue
+        # The record page also prints "里程 2.51 km" — those are results, not pins.
+        if any(word in text for word in RECORD_WORDS):
             continue
         distance = DISTANCE.search(text)
         name = DISTANCE.sub("", text)
@@ -116,6 +127,10 @@ def parse(lines: list[tuple[int, int, str]]) -> list[tuple[str, float]]:
             metres = float(distance.group(1))
             if distance.group(2) in ("公里", "千米", "km", "KM"):
                 metres *= 1000.0
+            # A checkpoint row always reads "（距你 N 米）"; anything else that
+            # happens to contain a number is not a pin.
+            if "距你" not in text and not re.search(r"[\u4e00-\u9fff]{2,}", name):
+                continue
             if name:
                 found.append((name, metres))
                 pending = None
@@ -147,14 +162,20 @@ def match(names, labels: dict[str, Point], threshold: float = 0.55) -> dict[str,
 
 
 def locate(observations: list[tuple[Point, float]], guess: Point | None = None,
-           iterations: int = 60) -> Point:
-    """Least squares position from distances to known points (Gauss-Newton)."""
-    if len(observations) < 3:
-        raise ValueError("至少需要三个打卡点的距离才能定位，请让页面完整显示打卡点后重试。")
+           iterations: int = 80) -> Point:
+    """Least squares position from distances to known points (Gauss-Newton).
+
+    Two distances leave one degree of freedom, and today's screen often only
+    shows two checkpoints, so a small ridge term pulls the solution toward the
+    middle of the known points instead of letting it run off to infinity.
+    """
+    if len(observations) < 2:
+        raise ValueError("至少需要两个打卡点的距离才能定位，请让页面完整显示打卡点后重试。")
     if guess is None:
-        weight = sum(1.0 / max(d, 1.0) for _, d in observations)
-        guess = (sum(p[0] / max(d, 1.0) for p, d in observations) / weight,
-                 sum(p[1] / max(d, 1.0) for p, d in observations) / weight)
+        guess = (sum(p[0] for p, _ in observations) / len(observations),
+                 sum(p[1] for p, _ in observations) / len(observations))
+    prior = guess
+    ridge = 0.0 if len(observations) >= 3 else 0.08
     x, y = guess
     for _ in range(iterations):
         jtj = [[0.0, 0.0], [0.0, 0.0]]
@@ -168,6 +189,10 @@ def locate(observations: list[tuple[Point, float]], guess: Point | None = None,
                 for column in range(2):
                     jtj[row][column] += jacobian[row] * jacobian[column]
                 jtr[row] += jacobian[row] * residual
+        jtj[0][0] += ridge
+        jtj[1][1] += ridge
+        jtr[0] += ridge * (x - prior[0])
+        jtr[1] += ridge * (y - prior[1])
         determinant = jtj[0][0] * jtj[1][1] - jtj[0][1] * jtj[1][0]
         if abs(determinant) < 1e-12:
             break
@@ -192,14 +217,18 @@ def read_screen(labels: dict[str, Point], screen: bytes | None = None) -> dict:
         shot.write_bytes(screen)
         lines = ocr_lines(shot)
     found = parse(lines)
+    flat = flatten("".join(text for _x, _y, text in lines))
     if not found:
-        raise RuntimeError("画面里没有找到打卡点，请停在「乐跑」打卡点列表页再读取。")
+        if "开始乐跑" in flat:
+            raise RuntimeError("屏幕上还没有打卡点列表：先在地图上等下打卡点加载出来。")
+        raise RuntimeError("这不是打卡点页面（看起来是记录页/首页），请回到「乐跑」页再读取。")
     pairs = match([name for name, _ in found], labels)
-    checkpoints, observations, unmatched = [], [], []
+    checkpoints, observations, unmatched, others = [], [], [], []
     for name, metres in found:
         key = pairs.get(name)
         if key is None:
             unmatched.append(name)
+            others.append({"ocr": name, "metres": metres})
             continue
         point = labels[key]
         checkpoints.append({"name": key, "ocr": name, "metres": metres, "point": point})
@@ -208,19 +237,26 @@ def read_screen(labels: dict[str, Point], screen: bytes | None = None) -> dict:
     result = {
         "checkpoints": checkpoints,
         "unmatched": unmatched,
+        "others": others,
         "position": None,
         "position_error": None,
         "warnings": [],
+        "text": "\n".join(text for _x, _y, text in lines),
+        "running": False,
     }
-    if len(observations) >= 3:
+    result["running"] = ("开始乐跑" not in flat) and ("用时" in flat)
+    if len(observations) >= 2:
         position = locate(observations)
         residuals = [abs(math.dist(position, point) - metres) for point, metres in observations]
         result["position"] = position
         result["position_error"] = max(residuals)
+        if len(observations) == 2:
+            result["warnings"].append(
+                "今天只有两个打卡点，位置是按两条距离估算的（误差可能上百米）；路线仍会按 50 米内经过全部打卡点。")
         if max(residuals) > 150:
             result["warnings"].append(f"定位残差 {max(residuals):.0f} 米偏大，可能有个打卡点识别错了；建议在地图上点一下起点。")
     else:
-        result["warnings"].append("能用于定位的打卡点不足三个，起点请在地图上手动点选。")
+        result["warnings"].append("能用于定位的打卡点不足两个，起点请在地图上手动点选。")
     if unmatched:
         result["warnings"].append("没匹配到路网的名称：" + "、".join(unmatched))
     return result

@@ -339,6 +339,32 @@ def play(points, stop: threading.Event | None = None, on_progress=None, speed: f
     asyncio.run(_play(points, stop, on_progress, max(0.1, speed)))
 
 
+async def _hold(point: Point, seconds: float) -> None:
+    from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
+    from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
+    from pymobiledevice3.services.dvt.instruments.location_simulation import LocationSimulation
+
+    serial = await _single_device()
+    latitude, longitude = to_wgs84(point)
+    async with (
+        UserspaceRsdTunnel(serial=serial) as rsd,
+        DvtProvider(rsd) as dvt,
+        LocationSimulation(dvt) as location,
+    ):
+        await location.set(latitude, longitude)
+        # The app needs a moment to re-read the fix and reprint the distances.
+        await asyncio.sleep(max(1.0, seconds))
+
+
+def hold(point: Point, seconds: float = 4.5) -> None:
+    """Put the simulated fix at one map point and leave it there.
+
+    The fix survives the connection closing, which is what the checkpoint
+    ranging needs: move, read the app, move again.
+    """
+    asyncio.run(_hold(point, seconds))
+
+
 def stop_simulation() -> None:
     """Ask the device to drop the simulation, waiting for its reply (phased clear)."""
     from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
