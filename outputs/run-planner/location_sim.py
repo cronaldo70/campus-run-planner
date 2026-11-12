@@ -351,7 +351,9 @@ async def _hold(point: Point, seconds: float) -> None:
         DvtProvider(rsd) as dvt,
         LocationSimulation(dvt) as location,
     ):
-        await location.set(latitude, longitude)
+        # A second process holding the tunnel would block here forever, so the
+        # whole "set then wait" is bounded and reported as a readable error.
+        await asyncio.wait_for(location.set(latitude, longitude), timeout=20.0)
         # The app needs a moment to re-read the fix and reprint the distances.
         await asyncio.sleep(max(1.0, seconds))
 
@@ -362,7 +364,13 @@ def hold(point: Point, seconds: float = 4.5) -> None:
     The fix survives the connection closing, which is what the checkpoint
     ranging needs: move, read the app, move again.
     """
-    asyncio.run(_hold(point, seconds))
+    try:
+        asyncio.run(asyncio.wait_for(_hold(point, seconds), timeout=seconds + 30.0))
+    except (asyncio.TimeoutError, TimeoutError):
+        raise RuntimeError(
+            "手机没有在 30 秒内接受模拟位置：多半是另一个规划器/脚本正占着定位隧道，"
+            "先把多余的窗口和后台脚本关掉再试。"
+        ) from None
 
 
 def stop_simulation() -> None:

@@ -82,10 +82,16 @@ def harvest(data: dict, labels: dict, network, *, settle: float, dry_run: bool,
     """Move the fix around and collect distance readings per checkpoint name."""
     tell = say or print
     readings: dict[str, list[tuple[tuple[float, float], float]]] = {}
+    previous: dict[str, float] = {}
     for index, vantage in enumerate(vantage_points(data, network), start=1):
         tell(f"[{index}] 把模拟位置放到 ({vantage[0]:.0f}, {vantage[1]:.0f})")
         if not dry_run:
-            sim.hold(vantage, seconds=settle)
+            try:
+                sim.hold(vantage, seconds=settle)
+            except Exception as error:
+                # One bad vantage should not throw the whole ranging away.
+                tell(f"  挪位置失败：{error}")
+                continue
         else:
             time.sleep(0.2)
         try:
@@ -93,6 +99,15 @@ def harvest(data: dict, labels: dict, network, *, settle: float, dry_run: bool,
         except Exception as error:
             tell(f"  截图失败：{error}")
             continue
+        # The app sometimes keeps the old distances for a second or two: if every
+        # line still matches the previous vantage, wait once more and re-read.
+        if previous and pairs and all(abs(previous.get(name, -1) - metres) < 1.0 for name, metres in pairs):
+            time.sleep(max(3.0, settle * 0.6))
+            try:
+                pairs = read_once(labels, attempt=f"第 {index} 个点（重读）")
+            except Exception:
+                pass
+        previous = dict(pairs)
         for name, metres in pairs:
             if MIN_RANGE <= metres <= MAX_RANGE:
                 readings.setdefault(name, []).append((vantage, metres))
@@ -132,6 +147,12 @@ def locate_all(data: dict, network, labels: dict, *, settle: float = 6.0,
     """Range every checkpoint the app lists; returns {name: {point, error, samples}}."""
     say = progress or (lambda message: None)
     readings = harvest(data, labels, network, settle=settle, dry_run=False, say=say)
+    stuck = [name for name, observations in readings.items()
+             if len(observations) >= 2 and max(m for _, m in observations) - min(m for _, m in observations) <= 1.0]
+    if stuck:
+        # Distances that never move mean the screen is stale, not that the walk is
+        # short: say so instead of returning a bogus 0-metre residual.
+        say("这几个打卡点的距离没跟着模拟位置变（" + "、".join(stuck) + "），把手机切回打卡点列表再看一眼")
     solved = {}
     for name, item in solve(readings).items():
         key = clean_name(name)

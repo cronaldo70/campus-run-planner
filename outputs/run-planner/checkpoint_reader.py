@@ -84,12 +84,16 @@ def ocr_lines(path) -> list[tuple[int, int, str]]:
     script = folder / "ocr.ps1"
     script.write_text(OCR_SCRIPT, encoding="utf-8-sig")
     destination = folder / "lines.txt"
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
-         str(path), str(destination)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
+             str(path), str(destination)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            timeout=45,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("OCR 45 秒没有返回，先关掉多余的窗口再试一次。") from None
     if result.returncode == 2:
         raise RuntimeError("这台电脑没有可用的 OCR 语言包，请在「设置 → 时间和语言」里安装中文识别。")
     if result.returncode or not destination.is_file():

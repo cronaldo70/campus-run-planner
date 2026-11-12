@@ -5,6 +5,7 @@ import json
 import math
 import queue
 import re
+import socket
 import threading
 import time
 import tkinter as tk
@@ -107,6 +108,8 @@ class Planner:
         self.via_names: list[str] = []
         self.auto_result = None
         self.reading = False
+        self.watchdog = None
+        self.checkpoint_cache: dict[tuple[str, ...], dict] = {}
 
         root.title("校园跑路线规划 · 实跑版")
         root.configure(bg=BG)
@@ -420,9 +423,37 @@ class Planner:
         self.reading = True
         self.read_button.configure(state="disabled", text="正在读取手机…")
         self.result.configure(text="正在截屏并识别打卡点，大约 3–5 秒，手机保持解锁。", fg=MUTED)
+        # A second window or a leftover script holding the tunnel would block the
+        # fix for ever; make sure the button always comes back.
+        self.watchdog = threading.Timer(150.0, self._read_timeout)
+        self.watchdog.daemon = True
+        self.watchdog.start()
         threading.Thread(target=self._read_worker, daemon=True).start()
 
+    def _read_timeout(self):
+        if self.reading:
+            message = "读取超过 150 秒还没结束：多半是另一个窗口或后台脚本正占着定位隧道。" \
+                      "把多余的规划器窗口和脚本关掉，再点一次读取。"
+            self.root.after(0, lambda: self.finish_read(None, message))
+
+    def show_progress(self, message):
+        self.result.configure(text=message, fg=MUTED)
+
     def _read_worker(self):
+        # Whatever happens in here, the button must come back: a raised thread
+        # used to leave the window stuck on 「正在读取手机…」 for ever.
+        try:
+            self._read_body()
+        except Exception as error:  # noqa: BLE001
+            text = str(error) or type(error).__name__
+            log = Path(__file__).with_name("planner-error.log")
+            try:
+                log.write_text(traceback.format_exc(), encoding="utf-8")
+            except OSError:
+                pass
+            self.root.after(0, lambda: self.finish_read(None, f"读取出错：{text}"))
+
+    def _read_body(self):
         labels = {name: tuple(point) for name, point in self.data["labels"]}
         try:
             report = reader.read_screen(labels)
@@ -433,13 +464,26 @@ class Planner:
         # three road points and trilaterate them from the printed distances.
         others = report.get("others") or []
         if others or not report.get("checkpoints"):
-            try:
-                import locate_checkpoints as ranging
+            def label_of(item):
+                return item.get("name") or item.get("ocr") or ""
 
-                solved = ranging.locate_all(self.data, self.network, labels, settle=6.0,
-                                            progress=lambda message: None)
-            except Exception:
-                solved = {}
+            seen = tuple(sorted(label_of(item) for item in others)) or \
+                   tuple(sorted(label_of(item) for item in report.get("checkpoints") or ()))
+            solved = self.checkpoint_cache.get(seen)
+            if solved is None:
+                self.root.after(0, lambda: self.show_progress(
+                    "打卡点名字不在路网里，正在三点测距定位（约 40 秒，先别点「开始乐跑」）…"))
+                try:
+                    import locate_checkpoints as ranging
+
+                    solved = ranging.locate_all(
+                        self.data, self.network, labels, settle=6.0,
+                        progress=lambda message: self.root.after(0, lambda m=message: self.show_progress(m)))
+                except Exception as error:  # noqa: BLE001 - any device hiccup must not freeze the window
+                    solved = {}
+                    text = str(error) or type(error).__name__
+                    self.root.after(0, lambda: self.show_progress(f"测距没成功：{text}"))
+                self.checkpoint_cache[seen] = solved
             for name, item in solved.items():
                 report.setdefault("checkpoints", []).append(
                     {"name": name, "ocr": name, "point": tuple(item["point"]),
@@ -448,6 +492,10 @@ class Planner:
 
     def finish_read(self, report, error):
         self.reading = False
+        watchdog = getattr(self, "watchdog", None)
+        if watchdog is not None:
+            watchdog.cancel()
+            self.watchdog = None
         self.read_button.configure(state="normal", text="读取手机打卡点（自动识别）")
         if report is None:
             self.result.configure(text=error, fg=AMBER)
@@ -977,8 +1025,33 @@ class Planner:
         window.focus_force()
 
 
+def claim_single_instance() -> socket.socket | None:
+    """Hold a local port so a second window cannot fight over the phone tunnel.
+
+    Two planners open at once is the classic "正在读取手机…" hang: both hold a
+    userspace tunnel against the same device and neither ever gets a reply.
+    """
+    guard = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        guard.bind(("127.0.0.1", 47653))
+        guard.listen(1)
+    except OSError:
+        guard.close()
+        return None
+    return guard
+
+
 def main():
+    guard = claim_single_instance()
     root = tk.Tk()
+    if guard is None:
+        root.withdraw()
+        messagebox.showwarning(
+            "规划器已经在运行",
+            "已经有一个规划器窗口开着，两个窗口会抢手机的定位通道，读取打卡点会一直卡住。\n"
+            "请用已经打开的那个窗口；要重开就先把旧窗口关掉。")
+        root.destroy()
+        return
     data_path = Path(__file__).with_name("campus_map.json")
     try:
         data = json.loads(data_path.read_text(encoding="utf-8"))
