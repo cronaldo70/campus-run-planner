@@ -53,7 +53,7 @@ class Planner:
         self.loop = tk.BooleanVar(value=False)
         self.campus_only = tk.BooleanVar(value=True)
         self.minimum = tk.StringVar(value="2.5")
-        self.pace = tk.StringVar(value="4:40")
+        self.pace = tk.StringVar(value="5:00")
         self.site = bridge.Site(data)
 
         root.title("校园实跑路线规划 · 开始跑步")
@@ -487,7 +487,7 @@ class Planner:
         halt.pack(side="left", padx=8)
         ttk.Button(buttons, text="关闭", command=lambda: close()).pack(side="left")
 
-        state = {"poll": None, "countdown": None, "closing": False}
+        state = {"poll": None, "countdown": None, "closing": False, "stats": None}
 
         def poll():
             if self.simulation is None or state["closing"]:
@@ -507,7 +507,9 @@ class Planner:
                     detail.configure(text=f"已发送 {index} / {total} 个位置点", fg=INK)
                 elif kind == "done":
                     bar.configure(value=100)
-                    detail.configure(text="跑完了。手机已停止模拟，正在按真实定位显示。", fg=GREEN)
+                    splits = bridge.splits_text(state.get("stats") or {})
+                    detail.configure(text="跑完了。手机已停止模拟，正在按真实定位显示。"
+                                          + (f"\n{splits}" if splits else ""), fg=GREEN)
                     halt.configure(state="disabled")
                 else:
                     detail.configure(text=f"回放中断：{payload}", fg=RED)
@@ -542,6 +544,7 @@ class Planner:
             self.simulation = bridge.Simulation(points)
             self.simulation.start()
             halt.configure(state="normal")
+            state["stats"] = stats
             short = stats.get("shortfall", 0.0)
             note = (f"轨迹 {len(points)} 个点 · 实际 {stats['meters'] / 1000:.2f} 公里 · "
                     f"名义 {bridge.format_time(stats['seconds'])}"

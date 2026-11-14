@@ -102,6 +102,18 @@ def format_time(seconds):
     return f"{minutes} 分 {secs} 秒"
 
 
+def splits_text(stats):
+    """Per-kilometre paces in the same shape as the app's record page."""
+    parts = []
+    for index, seconds in enumerate(stats.get("kms") or [], 1):
+        parts.append(f"第 {index} 公里 {format_pace(seconds)}")
+    tail = stats.get("tail")
+    if tail:
+        metres, seconds = tail
+        parts.append(f"最后 {metres / 1000:.2f} 公里 {format_pace(seconds)}")
+    return " · ".join(parts)
+
+
 def restore():
     """Drop any simulated position so the phone reports where it really is."""
     return sim.stop_simulation()

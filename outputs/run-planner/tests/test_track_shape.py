@@ -69,6 +69,16 @@ class WobbleTest(unittest.TestCase):
 
 
 class PaceTest(unittest.TestCase):
+    def test_kilometre_splits_look_like_a_real_record(self):
+        # the user's own record: 5'09" / 4'27" / 5'46" on a 4'58" average
+        points = sim.build_track([(0.0, 0.0), (1300.0, 0.0), (0.0, 0.0)],
+                                 pace=300.0, laps=1, loop=False, step=1.0)
+        stats = sim.track_stats(points)
+        self.assertEqual(len(stats["kms"]), 2)
+        self.assertGreater(stats["kms"][0], 300.0)
+        self.assertLess(stats["kms"][1], 300.0)
+        self.assertIsNotNone(stats["tail"])
+
     def test_mean_pace_matches_the_plan(self):
         distances = [float(x) for x in range(0, 3000, 2)]
         times = sim.pace_profile(distances, pace=360.0, seed=2)
@@ -80,7 +90,9 @@ class PaceTest(unittest.TestCase):
         gaps = [(b - a) for a, b in zip(times, times[1:])]
         speeds = [2.0 / gap for gap in gaps if gap > 0]
         self.assertGreater(max(speeds) / min(speeds), 1.04)
-        self.assertLess(max(speeds) / min(speeds), 1.45)
+        # a jog start plus a slow last few hundred metres: real records swing
+        # wider than a metronome, so allow up to 1.65 between the extremes
+        self.assertLess(max(speeds) / min(speeds), 1.65)
 
     def test_first_metres_are_slower_than_the_middle(self):
         distances = [float(x) for x in range(0, 3000, 2)]

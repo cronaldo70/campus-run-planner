@@ -160,11 +160,14 @@ def thin(points: list[Point], minimum: float) -> list[Point]:
 
 
 def pace_profile(distances: list[float], *, pace: float, seed=None,
-                 warmup: float = 22.0, variation: float = 0.075) -> list[float]:
-    """Timestamps that beat like a person: a slow start, then uneven splits.
+                 warmup: float = 22.0, cooldown: float = 34.0,
+                 push: float = 0.09, variation: float = 0.075) -> list[float]:
+    """Timestamps that beat like a person: a slow start, uneven splits, a jog-in.
 
-    The mean speed is normalised back to exactly ``1000 / pace``, so the average
-    pace is the planned one while individual splits wander by a few percent.
+    Real records show the opening kilometre slower, the middle one quicker and
+    the last half kilometre clearly slower again (5'09" / 4'27" / 5'46" on a
+    4'58" average run), so the profile warms up, wanders and cools down. The mean
+    speed is normalised back to exactly ``1000 / pace``.
     """
     base = 1000.0 / pace
     total = distances[-1] or 1.0
@@ -173,12 +176,18 @@ def pace_profile(distances: list[float], *, pace: float, seed=None,
              (0.28, 150.0, rng.uniform(0, TAU)),
              (0.12, 52.0, rng.uniform(0, TAU))]
     warm_metres = warmup * base * 1.6
+    cool_metres = cooldown * base * 1.8
     factors = []
     for distance in distances:
         factor = 1.0 + variation * sum(weight * math.sin(TAU * distance / wavelength + phase)
                                        for weight, wavelength, phase in waves)
         if warm_metres > 0 and distance < warm_metres:
             factor *= 0.76 + 0.24 * (distance / warm_metres)
+        # people settle in and push through the middle: both ends slower
+        factor *= 1.0 + push * math.sin(math.pi * min(1.0, distance / total))
+        if cool_metres > 0 and distance > total - cool_metres:
+            ramp = (distance - (total - cool_metres)) / cool_metres
+            factor *= 1.0 - 0.19 * min(1.0, ramp)
         factors.append(max(0.5, factor))
     times = [0.0]
     for index in range(1, len(distances)):
@@ -256,7 +265,8 @@ def build_track(route: list[Point], *, pace: float, laps: int = 1, loop: bool = 
 def track_stats(points: list[tuple[float, float, datetime]]) -> dict:
     """Distance, duration and the fast/slow ends of the resulting splits."""
     if len(points) < 2:
-        return {"meters": 0.0, "seconds": 0.0, "fastest": 0.0, "slowest": 0.0, "splits": []}
+        return {"meters": 0.0, "seconds": 0.0, "fastest": 0.0, "slowest": 0.0,
+                "splits": [], "kms": [], "tail": None}
     samples = [to_map(latitude, longitude) for latitude, longitude, _ in points]
     distances = cumulative(samples)
     seconds = (points[-1][2] - points[0][2]).total_seconds()
@@ -269,12 +279,27 @@ def track_stats(points: list[tuple[float, float, datetime]]) -> dict:
         elapsed = (points[end][2] - points[start][2]).total_seconds()
         if span >= window * 0.85 and elapsed > 0:
             splits.append(elapsed / span * 1000.0)
+    # per-kilometre splits the way the app prints them, plus the last part
+    kms, mark, left = [], 1000.0, 0.0
+    for index in range(1, len(points)):
+        while distances[index] >= mark:
+            span = distances[index] - distances[index - 1]
+            share = (mark - distances[index - 1]) / span if span > 0 else 0.0
+            before = (points[index - 1][2] - points[0][2]).total_seconds()
+            after = (points[index][2] - points[0][2]).total_seconds()
+            kms.append((before + (after - before) * share) - left)
+            left = before + (after - before) * share
+            mark += 1000.0
+    tail = distances[-1] - (len(kms) * 1000.0)
+    tail_seconds = seconds - left
     return {
         "meters": distances[-1],
         "seconds": seconds,
         "fastest": min(splits) if splits else seconds,
         "slowest": max(splits) if splits else seconds,
         "splits": splits,
+        "kms": kms,
+        "tail": (tail, tail_seconds / tail * 1000.0) if tail > 60 and tail_seconds > 0 else None,
     }
 
 
