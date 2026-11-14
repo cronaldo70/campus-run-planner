@@ -33,9 +33,23 @@ work\.venv\Scripts\python.exe -B outputs\run-planner\location_sim.py --play-gpx 
 | `outputs/run-planner/auto_route.py` | 开放式路线：Held-Karp 排序 + 里程补足 |
 | `outputs/run-planner/road_network.py` | 校园路网（3015 节点 / 3247 段）、避障 Dijkstra |
 | `outputs/run-planner/location_sim.py` | 轨迹生成（圆角/漂移/变速）+ GPX + DVT 回放 |
+| `outputs/real-run-planner/real_run.py` | 另一个前端：避障地图 + 起点自动反解 + 一键模拟跑 |
+| `outputs/real-run-planner/real_position.py` | 从「距你 N 米」反解手机位置（两圆相交 / 最小二乘 / 镜像解打分） |
+| `outputs/real-run-planner/real_run_sim.py` | 路线 → 时间戳轨迹 → 手机回放，并给候选点做校区/道路/障碍判定 |
 | `work/` | 一次性探针脚本、诊断图、建图脚本（`prepare_campus_map.py`） |
 | `outputs/README.md` | 完整使用说明与排查表 |
 | `outputs/TEST_REPORT.md` | 分阶段验收记录（含真机截图结论） |
+
+## 两个前端怎么选
+
+| | `outputs/run-planner`（启动规划器.bat） | `outputs/real-run-planner`（Open-Real-Run-Planner.cmd） |
+| --- | --- | --- |
+| 打卡点 | OCR + 三点测距，能把名单外的名字（如「名人景观墙碑记」）精确到 30 米内 | 只按名单匹配底图，1–2 个打卡点，读得更快更稳 |
+| 起点 | 读屏后自己算，也可以手点 | 「读取真实起点（自动）」：用「距你 N 米」反解，2 点镜像解按校区/道路评分消歧 |
+| 路线 | Held-Karp 开放式路线，自动补里程 | 避障路网 + 手动封路 + 途经点 |
+| 落地跑步 | 模拟跑（DVT 回放） | 模拟跑（同一套 DVT 回放）+ 本地计时 |
+
+两边共用 `location_sim.py` 的轨迹生成和回放，跑哪边都行；「读取打卡点更准」用左边，「起点自动 + 界面更简单」用右边。
 
 ## 有效成绩与异常判定
 
