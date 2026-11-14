@@ -25,6 +25,14 @@ RED = "#9a411d"
 FONT = "Microsoft YaHei UI"
 POINT_COLORS = ("#087765", "#a45120", "#6051a1", "#1f6179")
 NAMES = ("起点", "打卡点 A", "打卡点 B", "终点", "途经点", "封闭路段")
+# The label table now holds ~570 names taken from OSM; drawing all of them turns the
+# map into a wall of text, so only names near the current route (or these landmarks
+# when there is no route yet) are printed.
+LANDMARKS = {
+    "文典阁", "磬苑广场", "磬苑体育馆", "主体育场", "笃行北楼", "博学北楼", "博学南楼",
+    "蕙园1栋", "校医院", "西门", "北门", "东门", "南门", "人文楼", "行政楼", "艺术楼",
+}
+LABEL_RADIUS = 70.0
 
 
 class Planner:
@@ -55,6 +63,7 @@ class Planner:
         self.minimum = tk.StringVar(value="2.5")
         self.pace = tk.StringVar(value="5:00")
         self.site = bridge.Site(data)
+        bridge.set_site(self.site)
 
         root.title("校园实跑路线规划 · 开始跑步")
         root.geometry("1210x790")
@@ -624,9 +633,8 @@ class Planner:
                                dash=(4, 3) if closed or segment.reason else ())
         for ring in self.data["campus"]:
             canvas.create_line(coords(ring), fill="#798e75", dash=(4, 5))
-        for label, point in self.data["labels"]:
-            canvas.create_text(*self.screen(point), text=label, fill=INK, font=(FONT, 9))
         path = self.display_path or self.path
+        self.draw_labels(path)
         if len(path) > 1:
             canvas.create_line(coords(path), fill=WHITE, width=8, joinstyle="round")
             canvas.create_line(coords(path), fill=GREEN, width=4, joinstyle="round")
@@ -642,6 +650,28 @@ class Planner:
                 self.pin(point, "AB"[index - 1] if index <= 2 else str(index), POINT_COLORS[1 + (index - 1) % 2])
         for number, point in enumerate(self.via, 1):
             self.pin(point, str(number), "#53665c")
+
+    def draw_labels(self, path):
+        """Print only names near the current route: the table now holds ~570 entries."""
+        if not self.scale:
+            return
+        canvas = self.canvas
+        if len(path) > 1:
+            step = max(1, len(path) // 80)
+            samples = path[::step]
+        else:
+            samples = []
+        drawn = 0
+        for label, point in self.data["labels"]:
+            if samples:
+                if not any(math.dist(point, sample) < LABEL_RADIUS for sample in samples):
+                    continue
+            elif label not in LANDMARKS:
+                continue
+            if drawn >= 70:
+                break
+            canvas.create_text(*self.screen(point), text=label, fill=INK, font=(FONT, 9))
+            drawn += 1
 
     def pin(self, point, text, color):
         x, y = self.screen(point)

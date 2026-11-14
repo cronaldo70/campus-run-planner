@@ -64,6 +64,12 @@ class Site:
             return "建筑" if kind == "building" else "水域"
         return ""
 
+    def in_water(self, point):
+        return self.blocked(point) == "水域"
+
+    def in_building(self, point):
+        return self.blocked(point) == "建筑"
+
 
 def parse_pace(text):
     """'4:30' -> 270 seconds per kilometre."""
@@ -131,10 +137,83 @@ def build(route, *, pace, seed=None, minimum=None):
     if len(route) < 2:
         raise ValueError("路线还没有画出来。")
     points = sim.build_track(route, pace=pace, laps=1, loop=False, human=True, seed=seed)
+    points, snaps = snap_clear(points, _global_site)
     stats = sim.track_stats(points)
     if minimum is not None:
         stats["shortfall"] = max(0.0, float(minimum) - stats["meters"])
+    if snaps:
+        stats["water_snapped"] = snaps
     return points, stats
+
+
+_global_site: Site | None = None
+
+
+def set_site(site: Site):
+    global _global_site
+    _global_site = site
+
+
+def snap_clear(points, site, *, max_snap=30.0):
+    """Snap any point that fell into water or a building back to the nearest road edge.
+
+    ``wobble`` (±1.5 m) and ``round_corners`` (up to 12 m inside a turn) can push the
+    finished track off the road centre-line.  On narrow lakeside roads this lands
+    points in the water even though the *graph* edges never cross it.
+
+    Returns ``(cleaned_points, snap_count)``.
+    """
+    if site is None:
+        return points, 0
+    network = site.network
+    cleaned = []
+    hit = 0
+    for pt in points:
+        lat, lon = pt[0], pt[1]
+        ts = pt[2] if len(pt) > 2 else None
+        local = sim.to_map(lat, lon)
+        if site.blocked(local):
+            snapped = network.nearest(local)
+            if snapped is not None and snapped.offset < max_snap:
+                # Verify the snapped position is itself safe.
+                # On roads right up against a water boundary the projection
+                # can land on the water ring — try the alternative edge.
+                if site.blocked(snapped.point):
+                    # Re-run nearest but exclude that edge
+                    best2 = None
+                    for edge, seg in network.segments.items():
+                        if seg.reason or edge in network.closed or edge == snapped.edge:
+                            continue
+                        a, b = network.nodes[edge[0]], network.nodes[edge[1]]
+                        t = max(0.0, min(1.0, _projection(local, a, b)))
+                        pt2 = (a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]))
+                        d = math.dist(local, pt2)
+                        if d < max_snap and not site.blocked(pt2):
+                            if best2 is None or d < best2[0]:
+                                best2 = (d, pt2)
+                    if best2 is not None:
+                        glat, glon = sim.to_wgs84(best2[1])
+                        cleaned.append((glat, glon, ts) if ts is not None else (glat, glon))
+                        hit += 1
+                        continue
+                else:
+                    glat, glon = sim.to_wgs84(snapped.point)
+                    cleaned.append((glat, glon, ts) if ts is not None else (glat, glon))
+                    hit += 1
+                    continue
+        cleaned.append(pt)
+    return cleaned, hit
+
+
+def _projection(point, a, b):
+    """Scalar projection of *point* onto segment ab as a 0…1 fraction."""
+    ax, ay = a
+    bx, by = b
+    dx, dy = bx - ax, by - ay
+    d2 = dx * dx + dy * dy
+    if d2 == 0:
+        return 0.0
+    return ((point[0] - ax) * dx + (point[1] - ay) * dy) / d2
 
 
 def save(points, *, name=None):

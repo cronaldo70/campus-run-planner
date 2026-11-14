@@ -33,7 +33,13 @@ def main():
         offset = position.offset if position is not None else -1
         pairs = [(name, math.dist(truth, stations[name])) for name in names]
         pairs.sort(key=lambda item: item[1])
-        near2 = pairs[:2]
+        # Two checkpoints on the same spot cannot pin a position, so pick the two
+        # nearest *different* ones - that is what the app lists anyway.
+        near2 = [pairs[0]]
+        for name, metres in pairs[1:]:
+            if math.dist(stations[near2[0][0]], stations[name]) >= 40:
+                near2.append((name, metres))
+                break
         print(f"\n真值 {tuple(round(v, 1) for v in truth)} 离路 {offset:.1f} 米 · 两个最近 "
               f"{near2[0][0]} {near2[0][1]:.0f} 米 / {near2[1][0]} {near2[1][1]:.0f} 米")
         fix = real_position.resolve(near2, stations, inside=site.inside, road=site.road,

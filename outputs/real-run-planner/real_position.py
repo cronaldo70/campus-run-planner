@@ -145,12 +145,49 @@ def _score(point, *, inside, road, blocked, last, misfit=0.0):
     return Candidate(point, score, is_inside, offset, obstacle, distance_last, misfit)
 
 
+MIN_BASELINE = 20.0
+
+
+def _distinct(known):
+    """Collapse checkpoint names that share one spot.
+
+    The generated table gives 人文楼东侧 and 人文楼东门 the same coordinate, and the
+    app can list both; two circles with one centre say nothing, so only the first of
+    each cluster keeps its distance.
+    """
+    out = []
+    for point, metres in known:
+        if any(math.dist(point, other) < MIN_BASELINE for other, _ in out):
+            continue
+        out.append((point, metres))
+    return out
+
+
+def _ring(start, metres, count=72):
+    """Points ``metres`` away from ``start``: all that one distance can tell us."""
+    if metres <= 0:
+        return [start]
+    return [(start[0] + metres * math.cos(2 * math.pi * i / count),
+             start[1] + metres * math.sin(2 * math.pi * i / count)) for i in range(count)]
+
+
 def candidates(pairs, stations, *, inside=None, road=None, blocked=None, last=None):
     """Every point consistent with the distances, ranked by plausibility."""
     known = [(tuple(point), metres) for name, metres in pairs
              for point in [stations.get(name)] if point is not None]
-    if len(known) < 2:
+    known = _distinct(known)
+    if len(known) < 2 and not known:
         raise ValueError("能对上的打卡点不足两个，起点无法反解，请在地图上点选。")
+    if len(known) < 2:
+        # One usable distance: walk the circle it draws and let the map decide.
+        point, metres = known[0]
+        scored = []
+        for seed in _ring(point, metres):
+            found, misfit = _pattern_search(seed, known)
+            scored.append(_score(found, inside=inside, road=road, blocked=blocked,
+                                 last=last, misfit=misfit))
+        scored.sort(key=lambda item: item.score)
+        return scored
     ordered = sorted(known, key=lambda item: item[1])
     seeds = []
     for (a, ra), (b, rb) in zip(ordered, ordered[1:]):

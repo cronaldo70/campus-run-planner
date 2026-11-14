@@ -1,5 +1,6 @@
 """Read visible checkpoint names from a USB screenshot using the existing OCR."""
 
+import difflib
 import re
 import sys
 import tempfile
@@ -12,13 +13,27 @@ from checkpoint_reader import DISTANCE, flatten, ocr_lines
 from phone_screen import capture_usb_screen
 
 
-HEADER = re.compile(r"自由打卡.*(?:模式|打卡点)")
+HEADER = re.compile(r"自由打卡")
 BUTTONS = ("开始乐跑", "长按暂停", "继续乐跑", "结束乐跑", "长按结束")
 STATUS = re.compile(r"未打卡|已打卡")
 APPROXIMATE_LABELS = {"蕙园", "文典阁西门", "篮球场南门"}
 ANGLE = r"""(\d{1,3})[°º˚](\d{1,2})['′’](\d{1,2}(?:\.\d+)?)(?:["″”]|['′’]{2})"""
 CHINESE_COORDS = re.compile(rf"([南北])纬{ANGLE}[，,]?([东西])经{ANGLE}")
 ENGLISH_COORDS = re.compile(rf"{ANGLE}([NS])[，,]?{ANGLE}([EW])")
+
+# Longest first: 东北侧 must be tried before 东侧 and 东.
+DIRECTIONS = (
+    "东北侧", "西北侧", "东南侧", "西南侧",
+    "东北门", "西北门", "东南门", "西南门",
+    "东侧", "西侧", "南侧", "北侧",
+    "东门", "西门", "南门", "北门",
+    "东", "西", "南", "北",
+)
+# The app writes 人文楼东侧; the map often only has 人文楼.
+BUILDING_SUFFIXES = ("", "楼", "馆", "园", "场", "中心", "大楼")
+
+UNRESOLVED = Path(__file__).resolve().parent / "generated" / "unresolved.txt"
+MAX_CHECKPOINTS = 4
 
 
 def checkpoint_rows(lines):
@@ -31,7 +46,8 @@ def checkpoint_rows(lines):
         if HEADER.search(text):
             in_list = True
             continue
-        if not in_list:
+        # OCR sometimes loses the header line; a "（距你 N 米）" row is proof enough.
+        if not in_list and not ("距你" in text and DISTANCE.search(text)):
             continue
         if any(button in text for button in BUTTONS) or text in {"继续", "结束"}:
             break
@@ -43,9 +59,56 @@ def checkpoint_rows(lines):
         label = re.sub(r"^[^\u4e00-\u9fffA-Za-z]+", "", label).strip("（）()。,，:：")
         if len(label) >= 2 and re.search(r"[\u4e00-\u9fff]", label):
             names[label] = None
-    if not names or len(names) > 2:
-        raise ValueError("未能确认打卡点列表。本版支持最多两个打卡点，请完整显示本次名单后重试。")
+    if not names or len(names) > MAX_CHECKPOINTS:
+        raise ValueError(
+            f"未能确认打卡点列表（读到 {len(names)} 个，最多 {MAX_CHECKPOINTS} 个）。"
+            "请完整显示本次名单后重试。"
+        )
     return list(names)
+
+
+def resolve(labels, name):
+    """Match an OCR checkpoint name to a coordinate, tolerating small differences.
+
+    Order: exact → drop the direction (人文楼东侧 → 人文楼) → add a building suffix
+    → closest spelling (OCR sometimes drops or swaps one character).
+    """
+    if name in labels:
+        return labels[name]
+
+    for suffix in DIRECTIONS:
+        if not name.endswith(suffix):
+            continue
+        base = name[: -len(suffix)]
+        if len(base) < 2:
+            continue
+        for tail in BUILDING_SUFFIXES:
+            candidate = base + tail
+            if candidate in labels:
+                return labels[candidate]
+
+    close = difflib.get_close_matches(name, labels.keys(), n=1, cutoff=0.78)
+    if close:
+        return labels[close[0]]
+    return None
+
+
+def note_unresolved(names):
+    """Keep a list of names the map does not know, so they can be added later."""
+    if not names:
+        return
+    try:
+        UNRESOLVED.parent.mkdir(exist_ok=True)
+        known = set()
+        if UNRESOLVED.is_file():
+            known = {line.strip() for line in UNRESOLVED.read_text(encoding="utf-8").splitlines()}
+        fresh = [name for name in names if name not in known]
+        if fresh:
+            with UNRESOLVED.open("a", encoding="utf-8") as handle:
+                for name in fresh:
+                    handle.write(name + "\n")
+    except OSError:
+        pass
 
 
 def screen_lines(screen):
@@ -58,7 +121,10 @@ def screen_lines(screen):
 
 
 def read_checkpoints(labels, screen=None):
-    return [(name, labels.get(name)) for name in checkpoint_rows(screen_lines(screen))]
+    names = checkpoint_rows(screen_lines(screen))
+    resolved = [(name, resolve(labels, name)) for name in names]
+    note_unresolved([name for name, point in resolved if point is None])
+    return resolved
 
 
 def compass_coordinates(lines):

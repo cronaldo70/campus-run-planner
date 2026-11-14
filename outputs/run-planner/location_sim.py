@@ -37,7 +37,9 @@ TAU = math.tau
 # Corner radius used when a right-angle turn is rounded off, in metres.
 CORNER_RADIUS = 16.0
 # Peak sideways deviation of the pseudo-GPS wobble, in metres.
-WOBBLE = 2.0
+# Set to 1.5 so a road only needs 3 m of clearance from obstacles
+# instead of 4 m — important on narrow lakeside paths.
+WOBBLE = 1.5
 
 
 def path_length(route: list[Point]) -> float:
