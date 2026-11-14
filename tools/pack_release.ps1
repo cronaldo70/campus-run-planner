@@ -1,6 +1,6 @@
 ﻿# Build a release zip that can be handed to other people (no venv, no generated tracks).
 # ASCII only on purpose: Windows PowerShell 5.1 reads BOM-less files as ANSI.
-param([string]$Version = "v0.10")
+param([string]$Version = "v0.11")
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -48,3 +48,4 @@ Get-ChildItem -Path (Join-Path $published "generated") -Filter "*.gpx" | Remove-
 
 Compress-Archive -Path $stage -DestinationPath $zip -CompressionLevel Optimal
 Write-Host "built: $zip"
+

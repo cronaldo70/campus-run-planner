@@ -7,6 +7,11 @@ from math import dist, inf
 
 
 EPS = 1e-8
+# 步道乐跑 用的是高德底图：校内人行小径（OSM 的 path）它不画，贴着这种小径跑出来的轨迹
+# 在手机上看起来就是在草地/绿化带上直线斜穿。给 path 加权，让规划优先走大路，只有绕路
+# 超过 3 倍才会用小径；吸附标点时小径也要比大路近一倍才优先。
+PATH_PENALTY = 6.0
+PATH_NEAREST = 2.0
 
 
 def at(a, b, t):
@@ -92,6 +97,7 @@ class Network:
         self.nodes = {key: tuple(point) for key, point in data["nodes"].items()}
         self.segments = {}
         self.neighbors = {key: [] for key in self.nodes}
+        self.weights = {}
         self.closed = set()
         campus = [Ring(ring) for ring in data["campus"]]
         buildings, water = [], []
@@ -137,6 +143,7 @@ class Network:
                 length = dist(self.nodes[u], self.nodes[v])
                 self.neighbors[u].append((v, length))
                 self.neighbors[v].append((u, length))
+                self.weights[(u, v)] = 1.0 if segment.style == "road" else PATH_PENALTY
 
     def nearest(self, point, *, for_closure=False):
         point = tuple(point)
@@ -147,9 +154,12 @@ class Network:
             a, b = (self.nodes[key] for key in edge)
             snap = at(a, b, projection(point, a, b))
             offset = dist(point, snap)
-            if best is None or offset < best.offset:
-                best = Position(edge, snap, offset)
-        return best
+            # A footpath must be twice as close for the marker to land on it, so the
+            # route starts on a road the phone's basemap actually draws.
+            rank = offset * (1.0 if segment.style == "road" else PATH_NEAREST)
+            if best is None or rank < best[0]:
+                best = (rank, Position(edge, snap, offset))
+        return best[1] if best else None
 
     def route(self, start, end):
         for position in (start, end):
@@ -170,9 +180,10 @@ class Network:
             if node in goals and cost + goals[node] < best:
                 best, finish = cost + goals[node], node
             for neighbor, length in self.neighbors[node]:
-                if tuple(sorted((node, neighbor))) in self.closed:
+                edge = tuple(sorted((node, neighbor)))
+                if edge in self.closed:
                     continue
-                candidate = cost + length
+                candidate = cost + length * self.weights.get(edge, 1.0)
                 if candidate < costs.get(neighbor, inf):
                     costs[neighbor] = candidate
                     parents[neighbor] = node
@@ -194,7 +205,9 @@ class Network:
         if first is not None and start.point != self.nodes[first]:
             edges.add(start.edge)
         path.append(start.point)
-        return best, path[::-1], edges
+        # best is a weighted cost (footpaths cost 3x); report the real ground distance.
+        metres = sum(dist(a, b) for a, b in zip(path, path[1:]))
+        return metres, path[::-1], edges
 
     def plan(self, start, checkpoints, via, finish, *, minimum=None):
         """Visit checkpoints in either order and use existing roads for an optional longer finish."""
@@ -235,7 +248,7 @@ class Network:
                 edge = tuple(sorted((node, neighbor)))
                 if edge in self.closed:
                     continue
-                candidate = cost + length * (penalty if edge in heavy else 1.0)
+                candidate = cost + length * self.weights.get(edge, 1.0) * (penalty if edge in heavy else 1.0)
                 if candidate < costs.get(neighbor, inf):
                     costs[neighbor] = candidate
                     parents[neighbor] = node
