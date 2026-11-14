@@ -1,6 +1,6 @@
 # Build a release zip that can be handed to other people (no venv, no generated tracks).
 # ASCII only on purpose: Windows PowerShell 5.1 reads BOM-less files as ANSI.
-param([string]$Version = "v0.7")
+param([string]$Version = "v0.8")
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot

@@ -102,6 +102,18 @@ def format_time(seconds):
     return f"{minutes} 分 {secs} 秒"
 
 
+def restore():
+    """Drop any simulated position so the phone reports where it really is."""
+    return sim.stop_simulation()
+
+
+def display(route, *, radius=12.0, step=1.5):
+    """The route as it will look on the phone: rounded bends, one point per 1.5 m."""
+    if len(route) < 3:
+        return list(route)
+    return sim.densify(sim.round_corners(route, radius=radius), step)
+
+
 def build(route, *, pace, seed=None, minimum=None):
     """Return (points, stats) for a one-way run along ``route``."""
     if len(route) < 2:

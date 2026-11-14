@@ -81,6 +81,19 @@ def round_corners(route: list[Point], *, radius: float = CORNER_RADIUS, step: fl
             out.append(corner)
             continue
         cut = min(radius, 0.45 * math.dist(previous, corner), 0.45 * math.dist(corner, following))
+        if bend > 1.9:
+            # Full reversal: a runner swings round in a small arc instead of
+            # retracing the same line, which on a map looks like a spike.
+            side = (-into[1], into[0])
+            turn = min(cut, 3.0)
+            samples = max(6, int(math.ceil(math.pi * turn / max(step, 0.2))))
+            for index in range(samples + 1):
+                angle = math.pi * index / samples
+                out.append((
+                    corner[0] + side[0] * turn * (1.0 - math.cos(angle)) + into[0] * turn * math.sin(angle),
+                    corner[1] + side[1] * turn * (1.0 - math.cos(angle)) + into[1] * turn * math.sin(angle),
+                ))
+            continue
         start = (corner[0] - into[0] * cut, corner[1] - into[1] * cut)
         end = (corner[0] + away[0] * cut, corner[1] + away[1] * cut)
         samples = max(3, int(math.ceil(2.0 * cut / max(step, 0.2))))

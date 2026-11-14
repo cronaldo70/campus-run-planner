@@ -40,9 +40,9 @@ class Planner:
         self.mode = 0
         self.checkpoints = []
         self.path = []
+        self.display_path = []
         self.snaps = []
         self.route_ready = False
-        self.run_window = None
         self.sim_window = None
         self.simulation = None
         self.usb_read = None
@@ -89,8 +89,9 @@ class Planner:
         self.canvas.bind("<MouseWheel>", lambda e: self.zoom(1.25 ** (e.delta / 120), (e.x, e.y)))
         footer = tk.Frame(map_panel, bg=WHITE, padx=10, pady=6)
         footer.pack(fill="x")
-        self.start_button = ttk.Button(footer, text="开始跑步", command=self.start_run)
-        self.start_button.pack(side="right", padx=(10, 0), ipadx=8, ipady=4)
+        self.sim_button = ttk.Button(footer, text="模拟跑这条路线（手机不用动）", command=self.start_sim,
+                                     state="disabled")
+        self.sim_button.pack(side="right", padx=(10, 0), ipadx=8, ipady=4)
         self.label(footer, "蓝色路段为桥 · 灰色虚线已避开 · 红色为手动封闭").pack(side="left")
         credits = self.label(footer, "© OpenStreetMap contributors · ODbL", cursor="hand2")
         credits.pack(side="right")
@@ -109,11 +110,10 @@ class Planner:
         self.read_button.pack(fill="x", pady=(4, 3))
         self.position_button = ttk.Button(side, text="读取真实起点（自动）", command=self.read_position)
         self.position_button.pack(fill="x", pady=(0, 3))
-        self.sim_button = ttk.Button(side, text="模拟跑这条路线（手机不用动）", command=self.start_sim,
-                                    state="disabled")
-        self.sim_button.pack(fill="x", pady=(0, 3))
         self.label(side, "起点不用手输：把步道乐跑停在打卡点列表页点上面那个按钮，"
                          "会按「距你 N 米」自动反推位置。", size=9, wraplength=230, justify="left").pack(fill="x", pady=(2, 8))
+        self.label(side, "路线画好后点右下角「模拟跑这条路线」。", size=9, wraplength=230,
+                   justify="left").pack(fill="x", pady=(0, 6))
         self.label(side, "先选左边的按钮，再点地图上的道路。", size=9).pack(fill="x", pady=(2, 8))
         self.buttons = []
         for key, name in enumerate(NAMES[:5]):
@@ -163,7 +163,8 @@ class Planner:
 
     def read_position(self):
         self.read_usb(self.auto_start, self.apply_position_fix,
-                      "正在按打卡点距离反推起点…请让步道乐跑停在「乐跑」打卡点列表页，且不要开着模拟跑。")
+                      "正在读起点：先清掉上次的模拟定位（大约 5 秒），再按打卡点距离反推真实位置。\n"
+                      "请让步道乐跑停在「乐跑」打卡点列表页。")
 
     def stations(self):
         """Name -> map position for everything we can place."""
@@ -172,6 +173,14 @@ class Planner:
         return found
 
     def auto_start(self):
+        # The app measures distances from whatever position the phone believes
+        # it has. A previous simulated run can leave it parked kilometres away,
+        # so clear the fake position first and let Core Location settle.
+        try:
+            bridge.restore()
+        except Exception:
+            pass
+        time.sleep(3.0)
         known = self.stations()
         try:
             return real_position.read_and_resolve(
@@ -350,9 +359,9 @@ class Planner:
 
     def replan(self):
         self.path = []
+        self.display_path = []
         self.snaps = []
         self.route_ready = False
-        self.start_button.configure(state="disabled")
         self.sim_button.configure(state="disabled")
         self.hint.configure(text=f"在地图上选择：{self.selection_name()}")
         checkpoints = self.checkpoints or [(NAMES[i], None) for i in (1, 2)]
@@ -404,6 +413,9 @@ class Planner:
                 # a little extra to keep the recorded distance above the floor.
                 minimum=minimum * 1000 * 1.02 + 25,
             )
+            # what the canvas shows is what the phone will replay: rounded
+            # corners and 1 m spacing instead of raw graph vertices
+            self.display_path = bridge.display(self.path)
             self.distance.configure(text=f"{meters / 1000:.3f} 公里")
             remaining = minimum - meters / 1000
             heading = " → ".join([NAMES[0], *(checkpoints[i][0] for i in order)])
@@ -416,7 +428,6 @@ class Planner:
             self.status.configure(text=f"{heading}\n{outcome}", fg=INK if remaining <= 1e-6 else RED)
             self.route_ready = remaining <= 1e-6 and meters > 0
             if self.route_ready:
-                self.start_button.configure(state="normal")
                 self.sim_button.configure(state="normal")
                 try:
                     pace = bridge.parse_pace(self.pace.get())
@@ -432,42 +443,6 @@ class Planner:
             self.status.configure(text=str(error), fg=RED)
         finally:
             self.draw()
-
-    def start_run(self):
-        if not self.route_ready:
-            return
-        if self.run_window is not None:
-            self.run_window.lift()
-            return
-        window = tk.Toplevel(self.root)
-        self.run_window = window
-        window.title("开始跑步 · 本地计时")
-        window.transient(self.root)
-        window.configure(bg=WHITE, padx=18, pady=14)
-        self.label(window, f"计划路线 {self.distance.cget('text')}", size=14, bold=True).pack(anchor="w")
-        self.label(window, self.status.cget("text").splitlines()[0], wraplength=360, justify="left").pack(fill="x", pady=6)
-        self.label(window, "请在手机上点「开始乐跑」或「继续」记录实跑。", wraplength=360).pack(fill="x")
-        clock = self.label(window, "00:00:00", size=24, fg=GREEN, bold=True)
-        clock.pack(anchor="w", pady=8)
-        started = time.monotonic()
-        timer = None
-
-        def tick():
-            nonlocal timer
-            hours, rest = divmod(int(time.monotonic() - started), 3600)
-            minutes, seconds = divmod(rest, 60)
-            clock.configure(text=f"{hours:02d}:{minutes:02d}:{seconds:02d}")
-            timer = window.after(200, tick)
-
-        def close():
-            if timer is not None:
-                window.after_cancel(timer)
-            self.run_window = None
-            window.destroy()
-
-        ttk.Button(window, text="结束本地计时", command=close).pack(anchor="w")
-        window.protocol("WM_DELETE_WINDOW", close)
-        tick()
 
     def start_sim(self):
         if not self.route_ready or len(self.path) < 2:
@@ -648,9 +623,10 @@ class Planner:
             canvas.create_line(coords(ring), fill="#798e75", dash=(4, 5))
         for label, point in self.data["labels"]:
             canvas.create_text(*self.screen(point), text=label, fill=INK, font=(FONT, 9))
-        if len(self.path) > 1:
-            canvas.create_line(coords(self.path), fill=WHITE, width=8, joinstyle="round")
-            canvas.create_line(coords(self.path), fill=GREEN, width=4, joinstyle="round")
+        path = self.display_path or self.path
+        if len(path) > 1:
+            canvas.create_line(coords(path), fill=WHITE, width=8, joinstyle="round")
+            canvas.create_line(coords(path), fill=GREEN, width=4, joinstyle="round")
             if not self.loop.get() and 3 not in self.points:
                 self.pin(self.path[-1], "终", POINT_COLORS[3])
         for point, snap in self.snaps:
