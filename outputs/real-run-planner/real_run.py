@@ -3,6 +3,8 @@
 import json
 import math
 import queue
+import subprocess
+import sys
 import threading
 import time
 import tkinter as tk
@@ -33,6 +35,8 @@ LANDMARKS = {
     "蕙园1栋", "校医院", "西门", "北门", "东门", "南门", "人文楼", "行政楼", "艺术楼",
 }
 LABEL_RADIUS = 70.0
+VERSION = "0.12"
+APP_BUNDLE = "com.lepao.lptiyu"
 
 
 class Planner:
@@ -70,10 +74,11 @@ class Planner:
         root.minsize(980, 680)
         root.configure(bg=PAPER)
         root.option_add("*Font", (FONT, 10))
+        self.build_menu(root)
         banner = tk.Frame(root, bg=DEEP, padx=18, pady=13)
         banner.pack(fill="x")
         self.label(banner, "校园实跑路线规划", bg=DEEP, fg=WHITE, size=17, bold=True).pack(side="left")
-        self.label(banner, "安徽大学 · 磬苑校区", bg=DEEP, fg="#d7eadf").pack(side="right")
+        self.label(banner, f"安徽大学 · 磬苑校区 · v{VERSION}", bg=DEEP, fg="#d7eadf").pack(side="right")
 
         body = tk.Frame(root, bg=PAPER, padx=12, pady=12)
         body.pack(fill="both", expand=True)
@@ -112,6 +117,67 @@ class Planner:
     def label(parent, text, *, bg=WHITE, fg=INK, size=10, bold=False, **kwargs):
         return tk.Label(parent, text=text, bg=bg, fg=fg, font=(FONT, size, "bold" if bold else "normal"),
                         anchor="w", **kwargs)
+
+    # ---------- 菜单：一个窗口里够到全部东西 ----------
+    def build_menu(self, root):
+        menu = tk.Menu(root)
+        tools = tk.Menu(menu, tearoff=0)
+        tools.add_command(label="环境自检（Python / 依赖 / 手机连接）", command=self.run_doctor)
+        tools.add_command(label="打开旧版规划器（只画路线，不连手机）", command=self.open_legacy_planner)
+        tools.add_separator()
+        tools.add_command(label="打开生成的轨迹目录", command=self.open_generated)
+        menu.add_cascade(label="工具", menu=tools)
+        help_menu = tk.Menu(menu, tearoff=0)
+        help_menu.add_command(label="使用说明", command=self.open_readme)
+        help_menu.add_command(label="底图版权（OpenStreetMap）",
+                              command=lambda: open_url("https://www.openstreetmap.org/copyright"))
+        help_menu.add_command(label="关于", command=self.about)
+        menu.add_cascade(label="帮助", menu=help_menu)
+        root.configure(menu=menu)
+
+    @staticmethod
+    def python_exe(console: bool) -> str:
+        """pythonw.exe 下再拉起子进程时，需要控制台的要换回 python.exe。"""
+        exe = Path(sys.executable)
+        candidate = exe.with_name("python.exe" if console else "pythonw.exe")
+        return str(candidate if candidate.is_file() else exe)
+
+    def run_doctor(self):
+        script = Path(__file__).resolve().parent.parent.parent / "tools" / "doctor.py"
+        if not script.is_file():
+            messagebox.showinfo("环境自检", f"找不到 {script.name}。", parent=self.root)
+            return
+        subprocess.Popen([self.python_exe(True), "-B", str(script)], cwd=str(script.parent.parent),
+                         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+
+    def open_legacy_planner(self):
+        script = Path(__file__).resolve().parent.parent / "run-planner" / "run_planner.py"
+        if not script.is_file():
+            messagebox.showinfo("旧版规划器", f"找不到 {script.name}。", parent=self.root)
+            return
+        subprocess.Popen([self.python_exe(False), "-B", str(script)], cwd=str(script.parent))
+
+    def open_generated(self):
+        target = Path(__file__).resolve().with_name("generated")
+        target.mkdir(exist_ok=True)
+        subprocess.Popen(["explorer", str(target)])
+
+    def open_readme(self):
+        readme = Path(__file__).resolve().with_name("README.md")
+        open_url(readme.as_uri() if readme.is_file() else
+                 "https://github.com/cronaldo70/campus-run-planner")
+
+    def about(self):
+        messagebox.showinfo(
+            "关于",
+            f"校园实跑路线规划 v{VERSION}\n"
+            "安徽大学 · 磬苑校区\n\n"
+            f"底图：OpenStreetMap（ODbL）+ 570 个打卡点名\n"
+            f"目标 App：步道乐跑（{APP_BUNDLE}）\n"
+            "定位回放：pymobiledevice3 DVT LocationSimulation\n\n"
+            "「开始乐跑」要在手机上自己点 —— 电脑这边点不了屏幕。",
+            parent=self.root,
+        )
 
     def build_controls(self, side):
         self.label(side, "路线标点", size=13, bold=True).pack(fill="x")
@@ -679,7 +745,20 @@ class Planner:
         self.canvas.create_text(x, y, text=text, fill=WHITE, font=(FONT, 9, "bold"))
 
 
+def note_launch() -> None:
+    """每次打开都往 work/last-launch.log 记一行，出问题能看出是哪一版。"""
+    try:
+        log = Path(__file__).resolve().parent.parent.parent / "work" / "last-launch.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(f"{stamp}  v{VERSION}  {sys.executable}\n")
+    except OSError:
+        pass
+
+
 if __name__ == "__main__":
+    note_launch()
     data = json.loads(Path(__file__).with_name("campus.json").read_text(encoding="utf-8"))
     root = tk.Tk()
     Planner(root, data)

@@ -1,6 +1,6 @@
-﻿# Build a release zip that can be handed to other people (no venv, no generated tracks).
+# Build a release zip that can be handed to other people (no venv, no generated tracks).
 # ASCII only on purpose: Windows PowerShell 5.1 reads BOM-less files as ANSI.
-param([string]$Version = "v0.11")
+param([string]$Version = "v0.12")
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -34,6 +34,10 @@ $bats = Get-ChildItem -Path $root -Filter *.bat -File
 if (-not $bats) { throw "no .bat launcher in project root" }
 foreach ($bat in $bats) { Copy-Item $bat.FullName (Join-Path $stage $bat.Name) -Force }
 
+# self-check script used by the launcher (`... check`) and by the 工具 menu
+New-Item -ItemType Directory -Path (Join-Path $stage "tools") -Force | Out-Null
+Copy-Item (Join-Path $root "tools\doctor.py") (Join-Path $stage "tools\doctor.py") -Force
+
 Copy-Item (Join-Path $root "outputs\run-planner\tests") (Join-Path $stage "outputs\run-planner\tests") -Recurse -Force
 New-Item -ItemType Directory -Path (Join-Path $stage "outputs\run-planner\generated") -Force | Out-Null
 Set-Content -Path (Join-Path $stage "outputs\run-planner\generated\.gitkeep") -Value ""
@@ -45,6 +49,10 @@ New-Item -ItemType Directory -Path (Join-Path $published "generated") -Force | O
 Set-Content -Path (Join-Path $published "generated\.gitkeep") -Value ""
 Get-ChildItem -Path $published -Recurse -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
 Get-ChildItem -Path (Join-Path $published "generated") -Filter "*.gpx" | Remove-Item -Force
+
+# nobody needs caches, map backups or stale tracks in a zip they just unzip and run
+Get-ChildItem -Path $stage -Recurse -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
+Get-ChildItem -Path $stage -Recurse -File -Include "*.bak", "*.pyc", "*.gpx" | Remove-Item -Force
 
 Compress-Archive -Path $stage -DestinationPath $zip -CompressionLevel Optimal
 Write-Host "built: $zip"

@@ -37,6 +37,14 @@ def main():
     print("sim button:", planner.sim_button.cget("state"))
     print("status:", planner.status.cget("text").replace("\n", " | ")[:160])
 
+    menu = root.nametowidget(root.cget("menu"))
+    print("menu:", [menu.entrycget(i, "label") for i in range(menu.index("end") + 1)
+                    if menu.type(i) != "tearoff"])
+    tools_index = next(i for i in range(menu.index("end") + 1) if menu.type(i) == "cascade")
+    tools = root.nametowidget(menu.entrycget(tools_index, "menu"))
+    print("tools:", [tools.entrycget(i, "label") for i in range(tools.index("end") + 1)
+                     if tools.type(i) == "command"])
+
     planner.start_sim()
     root.update()
     window = planner.sim_window

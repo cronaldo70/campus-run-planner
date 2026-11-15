@@ -113,7 +113,11 @@
 | 越界回归 | 起点 (-220.99,-28.61) → 文典阁西门 (-187.7,-29.0) + 体育馆大门 (109.0,867.0)、下限 2500 米 → 2513 米、补里程 2 段、`outside` 0 米、避障违规 0、包围盒 (-221,-29,481,1030)。修复前同一输入尾段会跳到校外干道。 |
 | 状态回填 | `run_planner.py` 新增 `render_rows()`：A/B 行显示真实名字与「已定位 · 离路 N 米」，起点「已标记」、终点 open 模式「不限」、途经「N 个打卡点」；`work/test_gui_range.py` 输出 `[('start','已标记'), ('a','已定位 · 离路 33 米'), ('b','已定位 · 离路 50 米'), ('end','不限'), ('via','2 个打卡点')]`。默认最短距离改 2.5 公里。 |
 | 依赖与许可 | 新增 `requirements.txt`（`pymobiledevice3==11.52.1`）、`LICENSE`（MIT），README 补「别人怎么用」与「关于传感器」。 |
-| 首启动 bootstrap | `启动规划器.bat` 在 `work\.venv` 不存在时自己挑解释器（`CAMPUS_RUN_PYTHON` → `py -3.13/3.12/3.11/3.10` → `python`），建 venv 并 `pip install -r requirements.txt`；`CAMPUS_RUN_PIP_INDEX` 可指定镜像。 |
+| 首启动 bootstrap | 唯一的启动器 `启动校园跑.bat` 在 `work\.venv` 不存在时自己挑解释器（`CAMPUS_RUN_PYTHON` → `py -3.13/3.12/3.11/3.10` → `python`），建 venv 并 `pip install -r requirements.txt`；`CAMPUS_RUN_PIP_INDEX` 可指定镜像。 |
+| 一个入口 | 原来四个启动文件（`启动规划器.bat` / `Start-Planner.bat` / `Start-Real-Run.bat` / `Open-Real-Run-Planner.cmd`）合成 `启动校园跑.bat`：无参开实跑版、`planner` 开旧规划器、`check` 自检、`debug` 前台跑。界面新增「工具 / 帮助」菜单，旧规划器和自检都能从窗口里进。 |
+| 环境自检 | `tools\doctor.py` 逐项打印 Python 版本与 venv 归属、pymobiledevice3 版本、tkinter/Tk 版本、底图统计（570 名 / 3015 节点 / 380 段路 / 427 建筑水域）、generated 可写性、usbmuxd 端口与设备列表，末尾给出结论和 5 条排查顺序。实测手机拔掉时报「usbmuxd 没在 127.0.0.1:27015 监听」并给出接线/信任/驱动/开发者模式/换口的顺序。 |
+| 无控制台启动 | 启动器用 `pythonw.exe` 拉起界面，控制台立即关闭；每次打开往 `work\last-launch.log` 追加一行「时间 + 版本 + 解释器」，窗口没出来时能看出是哪一版、哪个 Python。 |
+| 启动器编码 | `.bat` 必须存成 GBK（中文 Windows 默认 936）。UTF-8 + `chcp 65001` 的写法会被 cmd 按字节切片读坏，实测报 `'d' is not recognized`、`'_ONLY'`、`'G" 2>&1'` 这类错行。 |
 | 分发验证 | `tools\pack_release.ps1` 打出 `dist\campus-run-planner-v0.6.zip`（145 KB，无 venv/无生成 GPX）；`work/test_release_boot.py` 解压到空目录、用 `CAMPUS_RUN_PYTHON` 指向 3.12 跑启动器，venv 建成并弹出「校园跑路线规划」窗口即算通过。 |
 
 ## 阶段 8 · 实跑版：起点自动反解、一键模拟跑、路线画得像人

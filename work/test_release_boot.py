@@ -1,14 +1,16 @@
-"""Check that a fresh copy of the project can bootstrap itself and open both GUIs.
+"""Check that a fresh copy of the project can bootstrap itself and open the GUI.
 
 Simulates what a stranger does after unzipping the release: no work\\.venv
-exists, so the launcher has to pick an interpreter, build the venv, install
-requirements.txt and start the planner. The interpreter is injected through
-CAMPUS_RUN_PYTHON so the test can run on machines where the py launcher only
-knows a version pymobiledevice3 does not support yet.
+exists, so `启动校园跑.bat` has to pick an interpreter, build the venv, install
+requirements.txt and start the real-run planner. The interpreter is injected
+through CAMPUS_RUN_PYTHON so the test can run on machines where the py launcher
+only knows a version pymobiledevice3 does not support yet.
 
-Both front ends get a turn: the classic planner (启动规划器.bat) and the
-obstacle-aware real-run planner (Start-Real-Run.bat). The second run reuses the
-venv the first one built, which also proves the venv is shared correctly.
+Two things get checked:
+  1. plain double-click  -> window titled 校园实跑路线规划
+  2. `check` argument    -> tools\\doctor.py runs and prints its verdict
+The second run reuses the venv the first one built, which also proves the venv
+is shared correctly.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
+LAUNCHER = "启动校园跑.bat"
 
 
 def release_zip() -> pathlib.Path:
@@ -60,12 +63,31 @@ def window_pid(title: str) -> int | None:
     return int(out) if out.isdigit() else None
 
 
+def read_log(path: pathlib.Path) -> str:
+    """A .bat echoes GBK on Chinese Windows while Python prints the console codepage,
+    so try both and never let a decode error break the report."""
+    raw = path.read_bytes()
+    for encoding in ("gbk", "utf-8"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def show(lines: list[str]) -> None:
+    for line in lines:
+        try:
+            print("  " + line)
+        except UnicodeEncodeError:
+            print("  " + line.encode(sys.stdout.encoding or "gbk", "replace").decode(
+                sys.stdout.encoding or "gbk", "replace"))
+
+
 def launch(project: pathlib.Path, bat: pathlib.Path, title: str, log: pathlib.Path) -> bool:
     env = dict(os.environ)
     env["CAMPUS_RUN_PYTHON"] = sys.executable
-    if not env.get("CAMPUS_RUN_PIP_INDEX"):
-        env.pop("CAMPUS_RUN_PIP_INDEX", None)
-    print(f"launcher: {bat.name} -> expecting a window titled {title}")
+    show([f"launcher: {bat.name} -> expecting a window titled {title}"])
     with log.open("wb") as handle:
         child = subprocess.Popen(
             ["cmd", "/c", bat.name], cwd=project,
@@ -81,35 +103,45 @@ def launch(project: pathlib.Path, bat: pathlib.Path, title: str, log: pathlib.Pa
         if child.poll() is not None:
             break
     venv_python = project / "work" / ".venv" / "Scripts" / "python.exe"
-    print("  venv:", venv_python.exists(), "window pid:", pid)
+    show([f"venv: {venv_python.exists()} window pid: {pid}"])
     if pid:
         subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
     if child.poll() is None:
         subprocess.run(["taskkill", "/PID", str(child.pid), "/T", "/F"], capture_output=True)
-    tail = log.read_text("utf-8", errors="replace").strip().splitlines()[-6:]
+    tail = read_log(log).strip().splitlines()[-6:]
     if tail:
-        print("  " + "\n  ".join(tail))
+        show(tail)
     return venv_python.exists() and bool(pid)
 
 
+def doctor(project: pathlib.Path, log: pathlib.Path) -> bool:
+    """`启动校园跑.bat check` 要能跑完自检（结尾会 pause，所以直接喂回车超时退出）。"""
+    show([f"launcher: {LAUNCHER} check -> expecting the self-check report"])
+    env = dict(os.environ)
+    env["CAMPUS_RUN_PYTHON"] = sys.executable
+    with log.open("wb") as handle:
+        subprocess.run(["cmd", "/c", LAUNCHER, "check"], cwd=project, stdin=subprocess.DEVNULL,
+                       stdout=handle, stderr=subprocess.STDOUT, env=env, timeout=240)
+    text = read_log(log)
+    show(text.strip().splitlines()[-8:])
+    return "环境自检" in text and ("结论：环境就绪" in text or "结论：有" in text)
+
+
 def main() -> int:
-    print("zip:", release_zip().name)
+    show([f"zip: {release_zip().name}"])
     work = ROOT / "work" / "release-test"
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
     project = unpack(work)
-    print("unpacked:", project)
+    show([f"unpacked: {project}"])
 
-    plan_bat = project / "启动规划器.bat"
-    if not plan_bat.exists():
-        plan_bat = project / "Start-Planner.bat"
-    real_bat = project / "Start-Real-Run.bat"
-    if not real_bat.exists():
-        raise SystemExit("release is missing Start-Real-Run.bat")
+    bat = project / LAUNCHER
+    if not bat.exists():
+        raise SystemExit(f"release is missing {LAUNCHER}")
 
-    ok = launch(project, plan_bat, "校园跑路线规划", work / "launcher-plan.log")
-    ok = launch(project, real_bat, "校园实跑路线规划", work / "launcher-real.log") and ok
+    ok = launch(project, bat, "校园实跑路线规划", work / "launcher-real.log")
+    ok = doctor(project, work / "launcher-check.log") and ok
     print("OK" if ok else "FAILED")
     return 0 if ok else 1
 
