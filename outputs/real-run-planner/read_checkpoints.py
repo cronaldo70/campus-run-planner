@@ -32,6 +32,19 @@ DIRECTIONS = (
 # The app writes 人文楼东侧; the map often only has 人文楼.
 BUILDING_SUFFIXES = ("", "楼", "馆", "园", "场", "中心", "大楼")
 
+# The app does not use OSM names. 体育馆 in 步道乐跑 means the stadium (OSM 主体育场),
+# and 大门 means its south gate — verified on 2026-11-25: the phone stood 41.7 m from
+# 榴园, the app read 体育馆大门 317 米 / 文典阁西门 378 米, and only
+# (主体育场南门 317, 文典阁西门 378) intersects there (the other two candidates have
+# no intersection at all).
+ALIASES = {
+    "体育馆": "主体育场",
+    "体育场": "主体育场",
+    "体育馆大门": "主体育场南门",
+    "体育场大门": "主体育场南门",
+    "体育馆正门": "主体育场南门",
+    "操场": "主体育场",
+}
 UNRESOLVED = Path(__file__).resolve().parent / "generated" / "unresolved.txt"
 MAX_CHECKPOINTS = 4
 
@@ -70,11 +83,15 @@ def checkpoint_rows(lines):
 def resolve(labels, name):
     """Match an OCR checkpoint name to a coordinate, tolerating small differences.
 
-    Order: exact → drop the direction (人文楼东侧 → 人文楼) → add a building suffix
-    → closest spelling (OCR sometimes drops or swaps one character).
+    Order: exact → app alias (体育馆大门 → 主体育场南门) → drop the direction
+    (人文楼东侧 → 人文楼) → add a building suffix → closest spelling.
     """
     if name in labels:
         return labels[name]
+
+    alias = ALIASES.get(name)
+    if alias and alias in labels:
+        return labels[alias]
 
     for suffix in DIRECTIONS:
         if not name.endswith(suffix):

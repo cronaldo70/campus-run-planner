@@ -9,6 +9,8 @@ work/wanderpin-gpx-dep/
 outputs/run-planner/generated/*.gpx
 outputs/run-planner/test_loop.gpx
 outputs/real-run-planner/generated/*.gpx
+outputs/real-run-planner/generated/unresolved.txt
+outputs/real-run-planner/generated/*.json
 
 # 真机截图与一次性探针输出
 work/*.png

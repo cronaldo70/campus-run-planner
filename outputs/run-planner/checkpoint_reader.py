@@ -128,6 +128,10 @@ def parse(lines: list[tuple[int, int, str]]) -> list[tuple[str, float]]:
         name = DISTANCE.sub("", text)
         name = re.sub(r"[\s,，.。:：%]+", "", name)
         name = NOISE.sub("", name)
+        # "体育馆大门（距你317米）" loses the number and 距你 here, leaving a hollow
+        # "体育馆大门（）" that then matches nothing (verified 2026-11-25: it made
+        # 文典阁西门（） fall back to 文典阁 and dropped 体育馆大门 entirely).
+        name = re.sub(r"[（(]\s*[）)]", "", name).strip("（）()")
         if distance:
             metres = float(distance.group(1))
             if distance.group(2) in ("公里", "千米", "km", "KM"):
@@ -148,12 +152,40 @@ def parse(lines: list[tuple[int, int, str]]) -> list[tuple[str, float]]:
     return found
 
 
+# 步道乐跑 does not use OSM names. It calls the stadium 体育馆, and 大门 means its
+# south gate. Checked against the live list on 2026-11-25: the phone stood 41.7 m
+# from 榴园, the app printed 体育馆大门 317 米 / 文典阁西门 378 米, and only the pair
+# (主体育场南门, 文典阁西门) intersects there — the 磬苑体育馆* candidates are 270 m
+# off and produce no intersection at all. Fuzzy matching alone would have picked
+# 磬苑体育馆东门 and thrown the fix 600 m away.
+APP_ALIASES = {
+    "体育馆大门": "主体育场南门",
+    "体育场大门": "主体育场南门",
+    "体育馆正门": "主体育场南门",
+    "体育场正门": "主体育场南门",
+    "体育馆": "主体育场",
+    "体育场": "主体育场",
+    "操场": "主体育场",
+    "田径场": "主体育场",
+}
+
+
 def match(names, labels: dict[str, Point], threshold: float = 0.55) -> dict[str, str]:
     """Map OCR spellings onto the road-network labels."""
     table = {key: normalise(key) for key in labels}
     pairs: dict[str, str] = {}
     for name in names:
         want = normalise(name)
+        # Exact names win outright: normalise() drops 西门/南门…, so without this
+        # 文典阁西门 ties with 文典阁 and loses to whichever comes first in the dict
+        # (340 m away — verified 2026-11-25).
+        if name in labels:
+            pairs[name] = name
+            continue
+        alias = APP_ALIASES.get(name.strip()) or APP_ALIASES.get(want)
+        if alias and alias in labels:
+            pairs[name] = alias
+            continue
         best, best_score = None, 0.0
         for key, folded in table.items():
             score = difflib.SequenceMatcher(None, want, folded).ratio()

@@ -35,7 +35,7 @@ LANDMARKS = {
     "蕙园1栋", "校医院", "西门", "北门", "东门", "南门", "人文楼", "行政楼", "艺术楼",
 }
 LABEL_RADIUS = 70.0
-VERSION = "0.12"
+VERSION = "0.13"
 APP_BUNDLE = "com.lepao.lptiyu"
 
 

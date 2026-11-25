@@ -129,7 +129,52 @@ def _pattern_search(start, known, steps=(40.0, 10.0, 3.0, 1.0)):
     return (x, y), best
 
 
-def _score(point, *, inside, road, blocked, last, misfit=0.0):
+def map_anchor(labels, screen=None):
+    """Read the place name the app prints next to its blue dot.
+
+    步道乐跑 keeps the map centred on the fix and prints a POI label right beside
+    it, so the label names the place the phone is standing in. Two distances to
+    two checkpoints always give two mirror solutions; this label breaks the tie
+    without asking the user to tap anything (verified 2026-11-25: the mirror 280 m
+    away would have started the run at 理工B楼 instead of 榴园).
+
+    The OCR helper reports line indices, not pixels, so the map band is found by
+    order: everything above the first "距你"/"自由打卡" line belongs to the map.
+    """
+    import tempfile
+
+    if screen is None:
+        return None
+    with tempfile.TemporaryDirectory(prefix="real-run-anchor-") as folder:
+        shot = Path(folder) / "screen.png"
+        shot.write_bytes(screen)
+        lines = reader.ocr_lines(shot)
+    band = []
+    for _x, y, raw in lines:
+        text = reader.flatten(raw)
+        if "距你" in text or "自由打卡" in text:
+            break
+        band.append((y, text))
+    if not band:
+        return None
+    middle = band[len(band) // 2][0]
+    skip = ("公里", "配速", "用时", "GPS", "信号", "打卡", "乐跑", "未打卡")
+    names = sorted(labels, key=len, reverse=True)
+    best = None
+    for y, text in band:
+        if not text or any(ch.isdigit() for ch in text):
+            continue
+        if any(word in text for word in skip):
+            continue
+        for name in names:
+            if name in text:
+                if best is None or abs(y - middle) < best[2]:
+                    best = (tuple(labels[name]), name, abs(y - middle))
+                break
+    return best
+
+
+def _score(point, *, inside, road, blocked, last, misfit=0.0, anchor=None):
     is_inside = inside(point) if inside else True
     offset = road(point) if road else 0.0
     obstacle = blocked(point) if blocked else ""
@@ -139,6 +184,10 @@ def _score(point, *, inside, road, blocked, last, misfit=0.0):
     distance_last = math.dist(point, last) if last else None
     if distance_last is not None and distance_last > 5:
         score += min(60.0, distance_last * 0.05)
+    # Both mirror points fit the circles exactly; the label under the blue dot is
+    # what tells them apart, so it is worth more than a few metres of road offset.
+    if anchor is not None:
+        score += min(150.0, math.dist(point, anchor[0]) * 0.5)
     # A position that contradicts the printed distances is worth less, but the
     # map names are only approximate, so this penalty is deliberately soft.
     score += min(300.0, math.sqrt(max(0.0, misfit)) * 1.5)
@@ -171,7 +220,7 @@ def _ring(start, metres, count=72):
              start[1] + metres * math.sin(2 * math.pi * i / count)) for i in range(count)]
 
 
-def candidates(pairs, stations, *, inside=None, road=None, blocked=None, last=None):
+def candidates(pairs, stations, *, inside=None, road=None, blocked=None, last=None, anchor=None):
     """Every point consistent with the distances, ranked by plausibility."""
     known = [(tuple(point), metres) for name, metres in pairs
              for point in [stations.get(name)] if point is not None]
@@ -185,7 +234,7 @@ def candidates(pairs, stations, *, inside=None, road=None, blocked=None, last=No
         for seed in _ring(point, metres):
             found, misfit = _pattern_search(seed, known)
             scored.append(_score(found, inside=inside, road=road, blocked=blocked,
-                                 last=last, misfit=misfit))
+                                 last=last, misfit=misfit, anchor=anchor))
         scored.sort(key=lambda item: item.score)
         return scored
     ordered = sorted(known, key=lambda item: item[1])
@@ -205,16 +254,17 @@ def candidates(pairs, stations, *, inside=None, road=None, blocked=None, last=No
             continue
         points.append(point)
         scored.append(_score(point, inside=inside, road=road, blocked=blocked,
-                             last=last, misfit=misfit))
+                             last=last, misfit=misfit, anchor=anchor))
     if not scored:
         raise ValueError("这几组距离解不出位置，请重读一次屏幕。")
     scored.sort(key=lambda item: item.score)
     return scored
 
 
-def resolve(pairs, stations, *, inside=None, road=None, blocked=None, last=None):
+def resolve(pairs, stations, *, inside=None, road=None, blocked=None, last=None, anchor=None):
     """Best position plus a sentence explaining how sure we are."""
-    scored = candidates(pairs, stations, inside=inside, road=road, blocked=blocked, last=last)
+    scored = candidates(pairs, stations, inside=inside, road=road, blocked=blocked, last=last,
+                        anchor=anchor)
     best = scored[0]
     rival = scored[1] if len(scored) > 1 else None
     note = ""
@@ -243,11 +293,21 @@ def matches(pairs, stations):
 
 
 def read_and_resolve(labels, stations, *, inside=None, road=None, blocked=None, last=None, screen=None):
+    if screen is None:
+        # One screenshot feeds both the distance OCR and the map label under the
+        # blue dot; taking two shots could catch the app mid-refresh.
+        from phone_screen import capture_usb_screen
+
+        screen = capture_usb_screen()
     pairs = distances_from_screen(labels, screen=screen)
-    fix = resolve(pairs, stations, inside=inside, road=road, blocked=blocked, last=last)
+    anchor = map_anchor(labels, screen=screen)
+    fix = resolve(pairs, stations, inside=inside, road=road, blocked=blocked, last=last,
+                  anchor=anchor)
     fix.method = f"{len(pairs)} 个打卡点的距离"
     fix.note = (fix.note + " " if fix.note else "") + "读数：" + "、".join(
         f"{reader.flatten(name)} {metres:.0f} 米" for name, metres in pairs)
+    if anchor is not None:
+        fix.note += f"；地图上蓝点旁写的是「{anchor[1]}」（{math.dist(fix.point, anchor[0]):.0f} 米外）"
     return fix
 
 
